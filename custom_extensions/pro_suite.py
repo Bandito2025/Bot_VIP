@@ -5,7 +5,6 @@ import secrets
 import sqlite3
 import logging
 import time as time_mod
-from urllib.parse import quote
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -24,15 +23,14 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 NODE_STATES = {}
 REISSUE_COOLDOWNS = {}
 
-# Полный каталог приложений по платформам (Android, iOS, Windows, macOS)
 APPS_CATALOG = {
     "android": {
         "title": "🤖 Android",
         "apps": {
-            "v2box":    ("V2Box",    "https://play.google.com/store/apps/details?id=dev.hexasoftware.v2box", "Нажмите «Добавить» ниже или откройте V2Box → Configs → «+» → Import v2ray uri from clipboard."),
+            "v2box":    ("V2Box",    "https://play.google.com/store/apps/details?id=dev.hexasoftware.v2box", "Нажмите «Добавить» на веб-странице подписки или откройте V2Box → Configs → «+» → Import v2ray uri from clipboard."),
             "v2rayng":  ("V2RayNG",  "https://github.com/2dust/v2rayNG/releases/latest", "Нажмите «Добавить» или в V2RayNG нажмите «+» вверху → «Импорт профиля из буфера обмена»."),
             "singbox":  ("Sing-box", "https://play.google.com/store/apps/details?id=io.nekohasekai.sfa", "Откройте Sing-box → Profiles → New Profile → Type: Remote → вставьте ссылку подписки."),
-            "v2raytun": ("V2RayTun", "https://play.google.com/store/apps/details?id=com.v2raytun.android", "Нажмите «Добавить» ниже или в V2RayTun нажмите «+» → «Импорт из буфера обмена»."),
+            "v2raytun": ("V2RayTun", "https://play.google.com/store/apps/details?id=com.v2raytun.android", "Нажмите «Добавить» на странице подписки или в V2RayTun нажмите «+» → «Импорт из буфера обмена»."),
             "happ":     ("Happ",     "https://play.google.com/store/apps/details?id=com.happproxy", "Нажмите «Добавить» или в приложении Happ нажмите «+» → «Вставить из буфера обмена»."),
             "incy":     ("Incy / Hiddify", "https://play.google.com/store/apps/details?id=app.hiddify.com", "Нажмите «Добавить» или в приложении нажмите «+ Новый профиль» → «Добавить из буфера».")
         }
@@ -78,7 +76,8 @@ def init_pro_tables():
         for col, ctype in [
             ("balance_rub", "REAL DEFAULT 0"),
             ("auto_renew", "INTEGER DEFAULT 1"),
-            ("ref_earned_rub", "REAL DEFAULT 0")
+            ("ref_earned_rub", "REAL DEFAULT 0"),
+            ("winback_sent", "INTEGER DEFAULT 0")
         ]:
             if col not in u_cols:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {col} {ctype}")
@@ -104,6 +103,28 @@ def init_pro_tables():
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ext_load_enabled', '1')")
         conn.commit()
 
+# ==============================================================================
+# 🏆 СИСТЕМА РАНГОВ ЛОЯЛЬНОСТИ И ИСТОРИЯ ПЛАТЕЖЕЙ (БЕЗ ВЫВОДА СРЕДСТВ)
+# ==============================================================================
+def get_user_loyalty_rank(user_id: int) -> tuple[str, int, int]:
+    """Возвращает (Название ранга, Постоянная скидка %, Количество оплат)."""
+    with sqlite3.connect(DB_PATH) as conn:
+        cnt = conn.execute("SELECT COUNT(*) FROM payments WHERE user_id = ?", (user_id,)).fetchone()[0]
+    if cnt >= 12:
+        return "🥇 VIP Постоянный", 15, cnt
+    elif cnt >= 6:
+        return "🥈 Серебряный", 10, cnt
+    elif cnt >= 3:
+        return "🥉 Бронзовый", 5, cnt
+    return "👤 Базовый", 0, cnt
+
+def get_user_payment_history(user_id: int, limit: int = 10):
+    with sqlite3.connect(DB_PATH) as conn:
+        return conn.execute(
+            "SELECT id, amount, provider, description, created_at FROM payments WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+            (user_id, limit)
+        ).fetchall()
+
 def get_wallet_data(user_id: int) -> tuple[float, int, float]:
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
@@ -112,9 +133,11 @@ def get_wallet_data(user_id: int) -> tuple[float, int, float]:
         ).fetchone()
         return (float(row[0]), int(row[1]), float(row[2])) if row else (0.0, 1, 0.0)
 
-def add_user_balance(user_id: int, amount_rub: float):
+def add_user_balance(user_id: int, amount_rub: float, description: str = "Пополнение внутреннего баланса"):
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("UPDATE users SET balance_rub = COALESCE(balance_rub, 0) + ? WHERE user_id = ?", (amount_rub, user_id))
+        conn.execute("INSERT INTO payments (user_id, amount, provider, description, created_at) VALUES (?, ?, 'Wallet', ?, ?)", (user_id, amount_rub, description, now_str))
         conn.commit()
 
 def credit_referral_cashback(buyer_id: int, payment_rub: float) -> tuple[int, float]:
@@ -222,10 +245,16 @@ def reissue_key_uuid_db(user_id: int, key_id: int) -> tuple[bool, str]:
     REISSUE_COOLDOWNS[f"{user_id}_{key_id}"] = time_mod.time()
     return True, f"🔄 <b>Ключ успешно перевыпущен!</b>\nНовый Sub ID: <code>{new_sub}</code>\nНовый UUID: <code>{new_uuid}</code>"
 
+# ==============================================================================
+# 🛡 NODE WATCHDOG + АВТО-FAILOVER + АВТОПРОДЛЕНИЕ + WIN-BACK СКИДКА (-25%)
+# ==============================================================================
 async def node_watchdog_and_autorenew_job(context: ContextTypes.DEFAULT_TYPE):
     import socket as sock
     with sqlite3.connect(DB_PATH) as conn:
         servers = conn.execute("SELECT id, name, host, is_active FROM servers WHERE is_active = 1").fetchall()
+
+    healthy_srv = None
+    down_srvs = []
 
     for srv_id, name, host, _ in servers:
         h_clean = host.split(":")[0] if ":" in host else host
@@ -237,13 +266,18 @@ async def node_watchdog_and_autorenew_job(context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             is_up = False
 
+        if is_up and not healthy_srv:
+            healthy_srv = (srv_id, name)
+        if not is_up:
+            down_srvs.append((srv_id, name))
+
         prev_state = NODE_STATES.get(srv_id, True)
         if prev_state and not is_up and ADMIN_ID:
             NODE_STATES[srv_id] = False
             try:
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=f"🚨 <b>[Node Watchdog] Упал сервер #{srv_id}: {html.escape(name)}</b> (<code>{html.escape(host)}</code>)!",
+                    text=f"🚨 <b>[Node Watchdog] Упал сервер #{srv_id}: {html.escape(name)}</b> (<code>{html.escape(host)}</code>)!\nЗапускаю авто-Failover ключей на резервную локацию.",
                     parse_mode="HTML"
                 )
             except Exception:
@@ -259,11 +293,22 @@ async def node_watchdog_and_autorenew_job(context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
+    # Авто-миграция (Failover) ключей с упавшего сервера на рабочий
+    if down_srvs and healthy_srv:
+        with sqlite3.connect(DB_PATH) as conn:
+            for d_id, _ in down_srvs:
+                conn.execute(
+                    "UPDATE user_keys SET server_id = ?, location_name = ? WHERE server_id = ? AND is_active = 1",
+                    (healthy_srv[0], healthy_srv[1], d_id)
+                )
+            conn.commit()
+
     now = datetime.now()
     soon_str = (now + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
     now_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
     with sqlite3.connect(DB_PATH) as conn:
+        # Автопродление с баланса с учетом персональной скидки по рангу лояльности
         expiring_keys = conn.execute("""
             SELECT k.id, k.user_id, k.key_name, k.expires_at, COALESCE(u.balance_rub, 0), COALESCE(u.auto_renew, 1)
             FROM user_keys k
@@ -273,29 +318,58 @@ async def node_watchdog_and_autorenew_job(context: ContextTypes.DEFAULT_TYPE):
         """, (now_str, soon_str)).fetchall()
 
         for kid, uid, kname, exp_str, bal, auto_on in expiring_keys:
-            if auto_on == 1 and bal >= 199:
+            rank_title, rank_disc, _ = get_user_loyalty_rank(uid)
+            renew_cost = max(99, int(199 * (100 - rank_disc) / 100))
+            if auto_on == 1 and bal >= renew_cost:
                 new_exp = (datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S") + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
-                conn.execute("UPDATE users SET balance_rub = balance_rub - 199 WHERE user_id = ?", (uid,))
+                conn.execute("UPDATE users SET balance_rub = balance_rub - ? WHERE user_id = ?", (renew_cost, uid))
                 conn.execute("UPDATE user_keys SET expires_at = ?, warned_24h = 0, warned_3h = 0 WHERE id = ?", (new_exp, kid))
-                conn.execute("INSERT INTO payments (user_id, amount, provider, description, created_at) VALUES (?, 199, 'AutoRenew', ?, ?)", (uid, f"Автопродление {kname}", now_str))
+                conn.execute("INSERT INTO payments (user_id, amount, provider, description, created_at) VALUES (?, ?, 'AutoRenew', ?, ?)", (uid, renew_cost, f"Автопродление {kname} ({rank_title})", now_str))
                 conn.commit()
                 try:
                     await context.bot.send_message(
                         chat_id=uid,
-                        text=f"🔄 <b>Автопродление сработало!</b>\nКлюч <b>{html.escape(kname)}</b> автоматически продлён на 30 дней (до <code>{new_exp}</code>) с вашего внутреннего баланса (-199 ₽).",
+                        text=f"🔄 <b>Автопродление сработало!</b>\nКлюч <b>{html.escape(kname)}</b> автоматически продлён на 30 дней (до <code>{new_exp}</code>) с вашего внутреннего баланса (-{renew_cost} ₽ с учётом вашего ранга {rank_title}).",
                         parse_mode="HTML"
                     )
                 except Exception:
                     pass
 
+        # Триггерная Win-back скидка -25% для клиентов с истёкшим ключом
+        winback_users = conn.execute("""
+            SELECT user_id FROM users
+            WHERE is_vip = 0 AND has_expired = 1 AND COALESCE(winback_sent, 0) = 0 AND bot_blocked = 0
+            LIMIT 10
+        """).fetchall()
+
+        for (w_uid,) in winback_users:
+            conn.execute("UPDATE users SET winback_sent = 1, active_discount_pct = 25 WHERE user_id = ?", (w_uid,))
+            conn.commit()
+            try:
+                kb_wb = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Забрать подписку со скидкой -25%", callback_data="order_vpn")]])
+                await context.bot.send_message(
+                    chat_id=w_uid,
+                    text=(
+                        "🎁 <b>Персональное предложение специально для вас!</b>\n\n"
+                        "Мы заметили, что срок вашей подписки истёк. Мы активировали в вашем профиле секретную скидку <b>-25%</b> на любой тариф!\n"
+                        "Нажмите кнопку ниже, чтобы продлить доступ со скидкой:"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb_wb
+                )
+            except Exception:
+                pass
+
 def render_pro_wallet_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     bal, auto_on, ref_rub = get_wallet_data(user_id)
+    rank_name, rank_disc, pay_cnt = get_user_loyalty_rank(user_id)
     auto_icon = "🟢 ВКЛ" if auto_on else "🔴 ВЫКЛ"
     text = (
         f"💎 <b>Центр самообслуживания и Кошелёк Bot_VIP</b>\n\n"
-        f"💰 <b>Внутренний баланс:</b> <code>{int(bal)} ₽</code>\n"
+        f"💰 <b>Внутренний баланс:</b> <code>{int(bal)} ₽</code> <i>(для оплаты и автопродления ключей)</i>\n"
+        f"🏆 <b>Ваш ранг лояльности:</b> {rank_name} (постоянная скидка <b>-{rank_disc}%</b>, покупок: {pay_cnt})\n"
         f"🔄 <b>Автопродление ключей:</b> {auto_icon}\n"
-        f"🤝 <b>Заработано с рефералов (20% кэшбэк):</b> <code>{int(ref_rub)} ₽</code>\n\n"
+        f"🤝 <b>Начислено бонусов с рефералов (20%):</b> <code>{int(ref_rub)} ₽</code>\n\n"
         f"Выберите нужный инструмент:"
     )
     kb = InlineKeyboardMarkup([
@@ -307,7 +381,10 @@ def render_pro_wallet_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("📖 Инструкции и Выбор приложения", callback_data="pro_guides_menu")
         ],
         [
-            InlineKeyboardButton("🎁 Подарить подписку другу (Gift)", callback_data="pro_create_gift"),
+            InlineKeyboardButton("🧾 История платежей (Чеки)", callback_data="pro_history"),
+            InlineKeyboardButton("🎁 Подарить подписку (Gift)", callback_data="pro_create_gift")
+        ],
+        [
             InlineKeyboardButton("❄️ Заморозка / 🔄 Сброс UUID", callback_data="pro_keys_tools")
         ],
         [
@@ -365,13 +442,19 @@ async def pro_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         raise ApplicationHandlerStop
 
     if data == "pro_topup_199":
-        add_user_balance(user.id, 199.0)
+        add_user_balance(user.id, 199.0, "Пополнение внутреннего баланса")
         inviter_id, cashback = credit_referral_cashback(user.id, 199.0)
+        # Если ранг лояльности вырос — обновляем постоянную скидку в профиле
+        _, rank_disc, _ = get_user_loyalty_rank(user.id)
+        if rank_disc > 0:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("UPDATE users SET active_discount_pct = MAX(COALESCE(active_discount_pct, 0), ?) WHERE user_id = ?", (rank_disc, user.id))
+                conn.commit()
         if inviter_id and cashback > 0:
             try:
                 await context.bot.send_message(
                     chat_id=inviter_id,
-                    text=f"💸 <b>Реферальный кэшбэк +20%!</b>\nВаш друг пополнил счёт, вам начислено <b>+{cashback} ₽</b> на внутренний баланс!",
+                    text=f"🎁 <b>Реферальный бонус +20%!</b>\nВаш друг пополнил счёт, вам начислено <b>+{cashback} ₽</b> на внутренний баланс для оплаты и автопродления ваших ключей!",
                     parse_mode="HTML"
                 )
             except Exception:
@@ -382,6 +465,18 @@ async def pro_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
             reply_markup=kb
         )
+        raise ApplicationHandlerStop
+
+    if data == "pro_history":
+        rows = get_user_payment_history(user.id, 10)
+        lines = ["🧾 <b>Ваша история операций и чеков:</b>\n"]
+        if not rows:
+            lines.append("<i>У вас пока нет совершенных операций.</i>")
+        else:
+            for pid, amt, prov, desc, cat in rows:
+                lines.append(f"• Чек <code>#{pid}</code> от <code>{cat}</code>\n  💰 <b>{int(amt)} ₽</b> ({html.escape(prov or 'Оплата')}) — {html.escape(desc or '')}")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад в Кошелёк", callback_data="pro_main")]])
+        await query.edit_message_text("\n".join(lines), parse_mode="HTML", reply_markup=kb)
         raise ApplicationHandlerStop
 
     if data == "pro_create_gift":
@@ -496,4 +591,4 @@ def register_extension(application):
     application.add_handler(CallbackQueryHandler(pro_callbacks, pattern=r"^pro_"), group=-1)
     if application.job_queue:
         application.job_queue.run_repeating(node_watchdog_and_autorenew_job, interval=180, first=25)
-    logger.info("🧩 Расширение ProSuite успешно проверено и загружено!")
+    logger.info("🧩 Расширение ProSuite (Лояльность, Чеки, Автопродление, Failover, Win-back) успешно загружено!")

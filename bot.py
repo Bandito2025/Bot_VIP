@@ -1,3 +1,17 @@
+# --- PATCH: Ignore 'Message is not modified' ---
+import telegram.error
+import telegram._bot
+_orig_do_post = telegram._bot.Bot._do_post
+async def _safe_do_post(self, endpoint, data, **kwargs):
+    try:
+        return await _orig_do_post(self, endpoint, data, **kwargs)
+    except telegram.error.BadRequest as e:
+        if "Message is not modified" in str(e):
+            return True
+        raise
+telegram._bot.Bot._do_post = _safe_do_post
+# -----------------------------------------------
+
 ﻿import os
 import re
 import sys

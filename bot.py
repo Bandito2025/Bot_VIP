@@ -4960,7 +4960,6 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
                 [InlineKeyboardButton("🔐 Лицензии на бота (Продажи)", callback_data="lic_admin_menu")]
             ])
         if not any(b.callback_data == "start_back_main" for r in kb_rows for b in r):
-            kb_rows.append([InlineKeyboardButton("🈴 На главную", callback_data="start_back_main")])
         await context.bot.send_message(chat_id=user.id, text=txt, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows))
         raise ApplicationHandlerStop
         try:

@@ -2183,89 +2183,100 @@ async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer(ok=True)
 
 
+_POLLING_LOCK = asyncio.Lock()
+
 async def poll_pending_invoices_job(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        invoices = autopay.get_pending_invoices(DB_PATH)
-        if not invoices:
-            return
-        yoo_shop = get_setting("pay_yookassa_shop_id", "")
-        yoo_sec = get_setting("pay_yookassa_secret", "")
-        cp_token = get_setting("pay_cryptopay_secret", "")
+    if _POLLING_LOCK.locked():
+        return
+    async with _POLLING_LOCK:
+        try:
+            invoices = autopay.get_pending_invoices(DB_PATH)
+            if not invoices:
+                return
+            yoo_shop = get_setting("pay_yookassa_shop_id", "")
+            yoo_sec = get_setting("pay_yookassa_secret", "")
+            cp_token = get_setting("pay_cryptopay_secret", "")
 
-        for row in invoices:
-            inv_db_id, inv_id, provider, user_id, t_id, days, price, tariff_name, is_lic = row
-            is_paid = False
+            for row in invoices:
+                inv_db_id, inv_id, provider, user_id, t_id, days, price, tariff_name, is_lic = row
+                is_paid = False
 
-            if provider == "yookassa" and yoo_shop and yoo_sec:
-                status = await autopay.check_yookassa_payment(yoo_shop, yoo_sec, inv_id)
-                if status == "succeeded":
-                    is_paid = True
-                elif status in ("canceled", "expired"):
-                    autopay.remove_invoice(DB_PATH, inv_id)
-                    continue
+                if provider == "yookassa" and yoo_shop and yoo_sec:
+                    status = await autopay.check_yookassa_payment(yoo_shop, yoo_sec, inv_id)
+                    if status == "succeeded":
+                        is_paid = True
+                    elif status in ("canceled", "expired"):
+                        autopay.remove_invoice(DB_PATH, inv_id)
+                        continue
 
-            elif provider == "cryptopay" and cp_token:
-                status = await autopay.check_cryptopay_payment(cp_token, inv_id)
-                if status == "paid":
-                    is_paid = True
-                elif status in ("expired",):
-                    autopay.remove_invoice(DB_PATH, inv_id)
-                    continue
+                elif provider == "cryptopay" and cp_token:
+                    status = await autopay.check_cryptopay_payment(cp_token, inv_id)
+                    if status == "paid":
+                        is_paid = True
+                    elif status in ("expired",):
+                        autopay.remove_invoice(DB_PATH, inv_id)
+                        continue
 
-            if is_paid:
-                autopay.remove_invoice(DB_PATH, inv_id)
-                record_payment(user_id, price, "RUB", f"Оплата тарифа: {tariff_name}")
-                with sqlite3.connect(DB_PATH) as conn:
-                    conn.execute("UPDATE users SET active_discount_pct = 0 WHERE user_id = ?", (user_id,))
-                    conn.commit()
-
-                if is_lic:
-                    now = datetime.now()
-                    lic_token = f"LIC-BOT-{user_id}-{secrets.token_hex(3).upper()} (до {(now + timedelta(days=days)).strftime('%Y-%m-%d')})"
+                if is_paid:
+                    # Атомарное удаление счета с проверкой rowcount от дублей
                     with sqlite3.connect(DB_PATH) as conn:
-                        conn.execute("UPDATE users SET is_vip = 1, bot_license = ? WHERE user_id = ?", (lic_token, user_id))
+                        cur = conn.execute("DELETE FROM pending_invoices WHERE inv_id = ?", (str(inv_id),))
                         conn.commit()
-                    try:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=f"🎉 <b>Оплата прошла успешно!</b> Лицензия Бота активирована на {days} дн.\n\n🔐 Токен лицензии: <code>{lic_token}</code>",
-                            parse_mode="HTML",
-                            protect_content=True
-                        )
-                    except Exception as ex_u:
-                        logger.warning(f"Send bot lic err: {ex_u}")
-                else:
-                    try:
-                        k_id, until, sub_url, _ = await create_or_extend_user_key(user_id, days=days, create_new=True)
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"🎉 <b>Оплата получена!</b> Создан Ключ #{k_id} (до {until})\n\n"
-                                f"🔗 <b>Единая ссылка подписки:</b>\n<code>{html.escape(sub_url)}</code>\n\n"
-                                f"Все ваши ключи доступны в разделе «🔑 Мои ключи»."
-                            ),
-                            parse_mode="HTML",
-                            protect_content=True
-                        )
-                    except Exception as ex_k:
-                        logger.error(f"Key issue error: {ex_k}")
+                        if cur.rowcount == 0:
+                            continue
 
-                if get_setting("pay_notify_enabled", "1") == "1":
-                    try:
-                        await context.bot.send_message(
-                            chat_id=ADMIN_ID,
-                            text=(
-                                f"💰 <b>НОВАЯ АВТОМАТИЧЕСКАЯ ОПЛАТА ({provider.upper()})</b>\n\n"
-                                f"👤 Клиент: ID <code>{user_id}</code>\n"
-                                f"📋 Тариф: {html.escape(tariff_name)} ({days} дн.)\n"
-                                f"💵 Сумма: {price} ₽"
-                            ),
-                            parse_mode="HTML"
-                        )
-                    except Exception as ex_a:
-                        logger.warning(f"Admin notify err: {ex_a}")
-    except Exception as e:
-        logger.error(f"poll_pending_invoices_job error: {e}")
+                    record_payment(user_id, price, "RUB", f"Оплата тарифа: {tariff_name}")
+                    with sqlite3.connect(DB_PATH) as conn:
+                        conn.execute("UPDATE users SET active_discount_pct = 0 WHERE user_id = ?", (user_id,))
+                        conn.commit()
+
+                    if is_lic:
+                        now = datetime.now()
+                        lic_token = f"LIC-BOT-{user_id}-{secrets.token_hex(3).upper()} (до {(now + timedelta(days=days)).strftime('%Y-%m-%d')})"
+                        with sqlite3.connect(DB_PATH) as conn:
+                            conn.execute("UPDATE users SET is_vip = 1, bot_license = ? WHERE user_id = ?", (lic_token, user_id))
+                            conn.commit()
+                        try:
+                            await context.bot.send_message(
+                                chat_id=user_id,
+                                text=f"🎉 <b>Оплата прошла успешно!</b> Лицензия Бота активирована на {days} дн.\n\n🔐 Токен лицензии: <code>{lic_token}</code>",
+                                parse_mode="HTML",
+                                protect_content=True
+                            )
+                        except Exception as ex_u:
+                            logger.warning(f"Send bot lic err: {ex_u}")
+                    else:
+                        try:
+                            k_id, until, sub_url, _ = await create_or_extend_user_key(user_id, days=days, create_new=True)
+                            await context.bot.send_message(
+                                chat_id=user_id,
+                                text=(
+                                    f"🎉 <b>Оплата получена!</b> Создан Ключ #{k_id} (до {until})\n\n"
+                                    f"🔗 <b>Единая ссылка подписки:</b>\n<code>{html.escape(sub_url)}</code>\n\n"
+                                    f"Все ваши ключи доступны в разделе «🔑 Мои ключи»."
+                                ),
+                                parse_mode="HTML",
+                                protect_content=True
+                            )
+                        except Exception as ex_k:
+                            logger.error(f"Key issue error: {ex_k}")
+
+                    if get_setting("pay_notify_enabled", "1") == "1":
+                        try:
+                            await context.bot.send_message(
+                                chat_id=ADMIN_ID,
+                                text=(
+                                    f"💰 <b>НОВАЯ АВТОМАТИЧЕСКАЯ ОПЛАТА ({provider.upper()})</b>\n\n"
+                                    f"👤 Клиент: ID <code>{user_id}</code>\n"
+                                    f"📋 Тариф: {html.escape(tariff_name)} ({days} дн.)\n"
+                                    f"💵 Сумма: {price} ₽"
+                                ),
+                                parse_mode="HTML"
+                            )
+                        except Exception as ex_a:
+                            logger.warning(f"Admin notify err: {ex_a}")
+        except Exception as e:
+            logger.error(f"poll_pending_invoices_job error: {e}")
 
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -3510,7 +3521,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
         return
 
-    if await handle_payment_admin_callback(query, context, get_setting, set_setting):
+    if await handle_payment_admin_callback(query, context, get_setting, set_setting, ADMIN_ID):
         return
 
     if data.startswith("admin_pay_secret_"):

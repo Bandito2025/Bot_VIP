@@ -37,9 +37,21 @@ def remove_invoice(db_path: str, inv_id: str):
         conn.execute("DELETE FROM pending_invoices WHERE inv_id = ?", (str(inv_id),))
         conn.commit()
 
-def get_pending_invoices(db_path: str):
+def cleanup_expired_invoices(db_path: str, hours: int = 24):
     with sqlite3.connect(db_path) as conn:
-        cur = conn.execute("SELECT id, inv_id, provider, user_id, t_id, days, price, tariff_name, is_bot_lic FROM pending_invoices ORDER BY id ASC")
+        conn.execute(
+            "DELETE FROM pending_invoices WHERE created_at < datetime('now', ?)",
+            (f"-{int(hours)} hours",)
+        )
+        conn.commit()
+
+def get_pending_invoices(db_path: str):
+    cleanup_expired_invoices(db_path, hours=24)
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            "SELECT id, inv_id, provider, user_id, t_id, days, price, tariff_name, is_bot_lic "
+            "FROM pending_invoices ORDER BY id ASC"
+        )
         return cur.fetchall()
 
 async def create_yookassa_payment(shop_id: str, secret_key: str, amount_rub: float, desc: str, return_url: str = "https://t.me", metadata: dict = None):

@@ -145,8 +145,12 @@ def render_gateway_card(p_key: str, get_setting_fn) -> tuple[str, InlineKeyboard
         ])
         return text, kb
 
-async def handle_payment_admin_callback(query, context, get_setting, set_setting) -> bool:
+async def handle_payment_admin_callback(query, context, get_setting, set_setting, admin_id: int = None) -> bool:
     data = query.data or ""
+    if data.startswith(("admin_pay_cfg_", "admin_pay_toggle_", "admin_pay_inp_")):
+        if admin_id is not None and query.from_user.id != admin_id:
+            await query.answer("⛔ Доступ запрещён.", show_alert=True)
+            return True
 
     if data.startswith("admin_pay_cfg_"):
         p_key = data.replace("admin_pay_cfg_", "")

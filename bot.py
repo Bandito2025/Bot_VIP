@@ -1,4 +1,102 @@
 
+# ==================== УПРАВЛЕНИЕ И РЕДАКТИРОВАНИЕ ТАРИФОВ ====================
+async def show_tariffs_management(update, context):
+    """Отображение списка тарифов с возможностью редактирования и удаления"""
+    query = update.callback_query
+    if query:
+        await query.answer()
+    
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, days, price, devices FROM tariffs ORDER BY id ASC")
+        rows = cursor.fetchall()
+        
+    txt = "📋 <b>Управление тарифами</b>
+
+"
+    kb_rows = [
+        [InlineKeyboardButton("➕ Добавить новый тариф", callback_data="tariff_add_new")]
+    ]
+    
+    if not rows:
+        txt += "<i>Тарифы пока не добавлены.</i>"
+    else:
+        for r in rows:
+            t_id, t_name, t_days, t_price, t_dev = r
+            txt += f"• <b>#{t_id}</b> 📱 {t_name} ({t_days} дн.) — <code>{t_price} ₽</code> | <i>{t_dev} устр.</i>
+"
+            # Для каждого тарифа делаем кнопку входа в редактирование и кнопку удаления
+            kb_rows.append([
+                InlineKeyboardButton(f"✏️ #{t_id} {t_name[:18]} ({t_price}₽)", callback_data=f"tariff_edit_{t_id}"),
+                InlineKeyboardButton("🗑️", callback_data=f"tariff_del_{t_id}")
+            ])
+            
+    kb_rows.append([InlineKeyboardButton("⬅️ Назад в Настройки оплаты", callback_data="admin_payments_settings")])
+    
+    markup = InlineKeyboardMarkup(kb_rows)
+    if query:
+        try:
+            await query.edit_message_text(txt, parse_mode="HTML", reply_markup=markup)
+        except Exception:
+            await query.message.reply_text(txt, parse_mode="HTML", reply_markup=markup)
+    elif update.message:
+        await update.message.reply_text(txt, parse_mode="HTML", reply_markup=markup)
+
+async def show_single_tariff_card(update, context, tariff_id: int):
+    """Карточка отдельного тарифа с кнопками изменения всех параметров"""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, days, price, devices FROM tariffs WHERE id = ?", (tariff_id,))
+        row = cursor.fetchone()
+        
+    if not row:
+        if query:
+            await query.answer("Тариф не найден!", show_alert=True)
+        return
+        
+    t_id, t_name, t_days, t_price, t_dev = row
+    txt = (
+        f"⚙️ <b>Редактирование тарифа #{t_id}</b>
+
+"
+        f"🏷 <b>Название:</b> {t_name}
+"
+        f"💰 <b>Цена:</b> {t_price} ₽
+"
+        f"⏳ <b>Длительность:</b> {t_days} дн.
+"
+        f"📱 <b>Устройств:</b> {t_dev} шт.
+
+"
+        f"<i>Выберите параметр, который хотите изменить:</i>"
+    )
+    
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💰 Изменить цену", callback_data=f"tariff_set_price_{t_id}"),
+            InlineKeyboardButton("⏳ Изменить срок", callback_data=f"tariff_set_days_{t_id}")
+        ],
+        [
+            InlineKeyboardButton("📱 Изменить устройства", callback_data=f"tariff_set_dev_{t_id}"),
+            InlineKeyboardButton("🏷 Переименовать", callback_data=f"tariff_set_name_{t_id}")
+        ],
+        [
+            InlineKeyboardButton("🗑️ Удалить этот тариф", callback_data=f"tariff_del_{t_id}")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Назад к тарифам", callback_data="tariffs_manage_menu")
+        ]
+    ])
+    
+    if query:
+        await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
+
+
+
 # --- PATCH: Ignore Message is not modified ---
 import telegram.error, telegram._bot
 _orig_do_post = telegram._bot.Bot._do_post
@@ -4951,35 +5049,13 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
             await query.message.delete()
         except Exception:
             pass
-        txt = build_admin_dashboard_text()
-        kb = admin_dashboard_keyboard()
-        kb_rows = [list(row) for row in kb.inline_keyboard]
-        if not any(b.callback_data == "cms_open_menu" for r in kb_rows for b in r):
-            kb_rows.extend([
-                [InlineKeyboardButton("✏️ Редактирование текстов и баннеров", callback_data="cms_open_menu")],
-                [InlineKeyboardButton("🔐 Лицензии на бота (Продажи)", callback_data="lic_admin_menu")],
-                [InlineKeyboardButton("🈴 На главную", callback_data="start_back_main")]
-            ])
-if not any(b.callback_data == "start_back_main" for r in kb_rows for b in r):
-            pass
-        await context.bot.send_message(chat_id=user.id, text=txt, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows))
-        raise ApplicationHandlerStop
-        try:
-            await query.message.delete()
-        except Exception:
-            pass
         if "build_admin_dashboard_text" in globals() and "admin_dashboard_keyboard" in globals():
             txt = build_admin_dashboard_text()
             kb = admin_dashboard_keyboard()
-            # Добавляем кнопку редактора текстов и возврата на главную, если их нет
             kb_rows = [list(row) for row in kb.inline_keyboard]
-            if not any(b.callback_data == "cms_open_menu" for r in kb_rows for b in r):
-                kb_rows.extend([
-                [InlineKeyboardButton("✏️ Редактирование текстов и баннеров", callback_data="cms_open_menu")],
-                [InlineKeyboardButton("🔐 Лицензии на бота (Продажи)", callback_data="lic_admin_menu")]
-            ])
-            if not any(b.callback_data == "start_back_main" for r in kb_rows for b in r):
-                kb_rows.append([InlineKeyboardButton("🈴 На главную", callback_data="start_back_main")])
+            kb_rows.append([InlineKeyboardButton("✏️ Редактирование текстов и баннеров", callback_data="cms_open_menu")])
+            kb_rows.append([InlineKeyboardButton("🔐 Лицензии на бота (Продажи)", callback_data="lic_admin_menu")])
+            kb_rows.append([InlineKeyboardButton("🈴 На главную", callback_data="start_back_main")])
             await context.bot.send_message(chat_id=user.id, text=txt, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows))
         elif "admin_cmd" in globals():
             await admin_cmd(update, context)

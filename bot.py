@@ -1609,8 +1609,7 @@ def update_tariff_field(t_id: int, field: str, value):
 
 def get_tariff_by_id(t_id: int):
     with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute("SELECT id, group_name, name, days, price_rub, price_stars FROM tariffs WHERE id = ?", (t_id,)).fetchone()
-        return row
+        return conn.execute("SELECT id, group_name, name, days, price_rub, price_stars FROM tariffs WHERE id = ?", (t_id,)).fetchone()
 
 
 def render_payment_settings_screen() -> tuple[str, InlineKeyboardMarkup]:
@@ -3453,12 +3452,11 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-        if data == "admin_tariffs_list":
+    if data == "admin_tariffs_list":
         tariffs = get_active_tariffs()
-        lines = ["📋 <b>Управление тарифами</b>
-
-<i>Нажмите ✏️ на тариф для редактирования цен, срока и названий:</i>
-"]
+        lines = []
+        lines.append("📋 <b>Управление тарифами</b>\n")
+        lines.append("<i>Выберите тариф для настройки:</i>\n")
         kb_rows = [[InlineKeyboardButton("➕ Добавить новый тариф", callback_data="admin_tariff_add")]]
         for t_id, grp, name, days, pr_rub, pr_stars in tariffs:
             d_lbl = "Без срока" if days == 0 else f"{days} дн."
@@ -3468,8 +3466,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("🗑", callback_data=f"admin_tariff_del_{t_id}")
             ])
         kb_rows.append([InlineKeyboardButton("⬅️ Назад в Настройки оплаты", callback_data="admin_payments_menu")])
-        await query.edit_message_text("
-".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows))
+        await query.edit_message_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows))
         return
 
     if data.startswith("admin_tedit_view_"):
@@ -3480,19 +3477,12 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         _, grp, name, days, pr_rub, pr_stars = t_row
         d_lbl = "Без срока" if days == 0 else f"{days} дн."
-        txt = (
-            f"⚙️ <b>Редактирование тарифа #{t_id}</b>
-
-"
-            f"📁 <b>Группа:</b> {html.escape(grp)}
-"
-            f"🏷 <b>Название:</b> {html.escape(name)}
-"
-            f"⏳ <b>Длительность:</b> {d_lbl}
-"
-            f"💰 <b>Цена:</b> {pr_rub} ₽ ({pr_stars} ⭐️)
-
-"
+        t_text = (
+            f"⚙️ <b>Редактирование тарифа #{t_id}</b>\n\n"
+            f"📁 <b>Группа:</b> {html.escape(grp)}\n"
+            f"🏷 <b>Название:</b> {html.escape(name)}\n"
+            f"⏳ <b>Длительность:</b> {d_lbl}\n"
+            f"💰 <b>Цена:</b> {pr_rub} ₽ ({pr_stars} ⭐️)\n\n"
             f"<i>Выберите параметр для изменения:</i>"
         )
         kb = InlineKeyboardMarkup([
@@ -3503,7 +3493,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🗑 Удалить тариф", callback_data=f"admin_tariff_del_{t_id}")],
             [InlineKeyboardButton("⬅️ К списку тарифов", callback_data="admin_tariffs_list")]
         ])
-        await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
+        await query.edit_message_text(t_text, parse_mode="HTML", reply_markup=kb)
         return
 
     if data.startswith("admin_tedit_param_"):
@@ -3537,11 +3527,17 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         t_id = int(data.split("_")[-1])
         delete_tariff(t_id)
         tariffs = get_active_tariffs()
-        lines = ["📋 <b>Управление тарифами</b>\n"]
+        lines = []
+        lines.append("📋 <b>Управление тарифами</b>\n")
+        lines.append("<i>Тариф успешно удален!</i>\n")
         kb_rows = [[InlineKeyboardButton("➕ Добавить новый тариф", callback_data="admin_tariff_add")]]
         for tid, grp, name, days, pr_rub, pr_stars in tariffs:
-            lines.append(f"• <b>#{tid} {html.escape(name)}</b> ({days} дн.) — <code>{pr_rub} ₽</code>")
-            kb_rows.append([InlineKeyboardButton(f"🗑 Удалить: {name} ({pr_rub} ₽)", callback_data=f"admin_tariff_del_{tid}")])
+            d_lbl = "Без срока" if days == 0 else f"{days} дн."
+            lines.append(f"• #{tid} <b>{html.escape(name)}</b> ({d_lbl}) — <code>{pr_rub} ₽</code> [{html.escape(grp)}]")
+            kb_rows.append([
+                InlineKeyboardButton(f"✏️ #{tid} {name[:16]} ({pr_rub}₽)", callback_data=f"admin_tedit_view_{tid}"),
+                InlineKeyboardButton("🗑", callback_data=f"admin_tariff_del_{tid}")
+            ])
         kb_rows.append([InlineKeyboardButton("⬅️ Назад в Настройки оплаты", callback_data="admin_payments_menu")])
         await query.edit_message_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows))
         return
@@ -4043,9 +4039,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             set_setting(f"pay_{p_key}_enabled", "1")
             text_out, kb_out = render_payment_settings_screen()
             await msg.reply_text(f"✅ Настройки для <b>{html.escape(p_key)}</b> сохранены!\n\n{text_out}", parse_mode="HTML", reply_markup=kb_out)
-            return
-
-                elif mode and mode.startswith("tedit_"):
+            return        elif mode and mode.startswith("tedit_"):
             context.user_data["mode"] = None
             _, action, t_id_str = mode.split("_", 2)
             t_id = int(t_id_str)
@@ -4074,7 +4068,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if t_row:
                 _, grp, name, days, pr_rub, pr_stars = t_row
                 d_lbl = "Без срока" if days == 0 else f"{days} дн."
-                txt = (
+                t_text = (
                     f"⚙️ <b>Редактирование тарифа #{t_id}</b>
 
 "
@@ -4097,10 +4091,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("🗑 Удалить тариф", callback_data=f"admin_tariff_del_{t_id}")],
                     [InlineKeyboardButton("⬅️ К списку тарифов", callback_data="admin_tariffs_list")]
                 ])
-                await msg.reply_text(txt, parse_mode="HTML", reply_markup=kb)
+                await msg.reply_text(t_text, parse_mode="HTML", reply_markup=kb)
             return
 
-elif mode == "add_tariff":
+
+
+        elif mode == "add_tariff":
             context.user_data["mode"] = None
             parts = [p.strip() for p in text.split("|")]
             if len(parts) >= 4 and parts[2].isdigit() and parts[3].isdigit():

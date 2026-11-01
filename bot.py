@@ -2646,43 +2646,47 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"TG payments invoice error: {e}")
 
                 if p_key == "yookassa":
-            yoo_shop = get_setting("pay_yookassa_shop_id", "")
-            yoo_sec = get_setting("pay_yookassa_secret", "")
-            if yoo_shop and yoo_sec:
-                try:
-                    idem = str(uuid.uuid4())
-                    post_body = {
-                        "amount": {"value": f"{pr_rub:.2f}", "currency": "RUB"},
-                        "confirmation": {"type": "redirect", "return_url": "https://t.me"},
-                        "capture": True,
-                        "description": f"{name} (ID {user.id})",
-                        "metadata": {"user_id": user.id, "tariff_id": t_id}
-                    }
-                    async with httpx.AsyncClient(timeout=6.0) as client:
-                        resp = await client.post("https://api.yookassa.ru/v1/payments", auth=(yoo_shop, yoo_sec), headers={"Idempotence-Key": idem}, json=post_body)
-                        res = resp.json()
-                        if resp.status_code == 200 and "confirmation" in res:
-                            pay_url = res["confirmation"]["confirmation_url"]
-                            pay_id = res["id"]
-                            with sqlite3.connect(DB_PATH) as conn:
-                                is_lic = 1 if "Бота" in grp else 0
-                                conn.execute(
-                                    "INSERT INTO pending_invoices (inv_id, provider, user_id, t_id, days, price, tariff_name, is_bot_lic) VALUES (?, 'yookassa', ?, ?, ?, ?, ?, ?)",
-                                    (pay_id, user.id, t_id, days, pr_rub, name, is_lic)
+                    yoo_shop = get_setting("pay_yookassa_shop_id", "")
+                    yoo_sec = get_setting("pay_yookassa_secret", "")
+                    if yoo_shop and yoo_sec:
+                        try:
+                            idem = str(uuid.uuid4())
+                            post_body = {
+                                "amount": {"value": f"{pr_rub:.2f}", "currency": "RUB"},
+                                "confirmation": {"type": "redirect", "return_url": "https://t.me"},
+                                "capture": True,
+                                "description": f"{name} (ID {user.id})",
+                                "metadata": {"user_id": user.id, "tariff_id": t_id}
+                            }
+                            async with httpx.AsyncClient(timeout=6.0) as client:
+                                resp = await client.post(
+                                    "https://api.yookassa.ru/v1/payments",
+                                    auth=(yoo_shop, yoo_sec),
+                                    headers={"Idempotence-Key": idem},
+                                    json=post_body
                                 )
-                                conn.commit()
-                            kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💳 Оплатить {pr_rub} ₽ (СБП / Карты)", url=pay_url)]])
-                            await query.message.reply_text(
-                                f"💳 <b>Счет на оплату: {html.escape(name)}</b>\n\n"
-                                f"💰 Сумма: <code>{pr_rub} ₽</code>\n\n"
-                                f"⚡️ <i>Оплатите по кнопке ниже. Ключ активируется автоматически сразу после оплаты.</i>",
-                                parse_mode="HTML",
-                                reply_markup=kb
-                            )
-                            return
-                except Exception as e:
-                    logger.error(f"YooKassa Invoice Error: {e}")
-
+                                res = resp.json()
+                                if resp.status_code == 200 and "confirmation" in res:
+                                    pay_url = res["confirmation"]["confirmation_url"]
+                                    pay_id = res["id"]
+                                    with sqlite3.connect(DB_PATH) as conn:
+                                        is_lic = 1 if "Бота" in grp else 0
+                                        conn.execute(
+                                            "INSERT INTO pending_invoices (inv_id, provider, user_id, t_id, days, price, tariff_name, is_bot_lic) VALUES (?, 'yookassa', ?, ?, ?, ?, ?, ?)",
+                                            (pay_id, user.id, t_id, days, pr_rub, name, is_lic)
+                                        )
+                                        conn.commit()
+                                    kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💳 Оплатить {pr_rub} ₽ (СБП / Карты)", url=pay_url)]])
+                                    await query.message.reply_text(
+                                        f"💳 <b>Счет на оплату: {html.escape(name)}</b>\n\n"
+                                        f"💰 Сумма: <code>{pr_rub} ₽</code>\n\n"
+                                        f"⚡️ <i>Оплатите по кнопке ниже. Ключ активируется автоматически сразу после оплаты.</i>",
+                                        parse_mode="HTML",
+                                        reply_markup=kb
+                                    )
+                                    return
+                        except Exception as e:
+                            logger.error(f"YooKassa Invoice Error: {e}")
         if p_key == "cryptopay":
             cp_token = get_setting("pay_cryptopay_secret", "")
             usdt_rate = float(get_setting("currency_usdt_rate", "95.0") or 95.0)
@@ -4117,7 +4121,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             set_setting(f"pay_{p_key}_enabled", "1")
             text_out, kb_out = render_payment_settings_screen()
             await msg.reply_text(f"✅ Настройки для <b>{html.escape(p_key)}</b> сохранены!\n\n{text_out}", parse_mode="HTML", reply_markup=kb_out)
-            return        elif mode and mode.startswith("tedit_"):
+            return
+        elif mode and mode.startswith("tedit_"):
             context.user_data["mode"] = None
             _, action, t_id_str = mode.split("_", 2)
             t_id = int(t_id_str)

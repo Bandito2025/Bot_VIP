@@ -61,7 +61,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 DB_PATH = os.getenv("DB_PATH", "bot_data.db")
 LOG_PATH = os.getenv("LOG_PATH", "bot.log")
-SUB_PORT = int(os.getenv("SUB_PORT", "2096"))
+SUB_PORT = int(os.getenv("SUB_PORT", "2097"))
 EXTENSIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "custom_extensions")
 
 if not TOKEN or TOKEN == "your_telegram_bot_token_here":
@@ -443,7 +443,97 @@ def start_sub_aggregator_server():
         class SubHandler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
                 pass
+            def do_HEAD(self):
+                self.do_GET()
+
             def do_GET(self):
+                # --- Маршруты раздачи и проверки лицензий ---
+                import os, sqlite3
+                from urllib.parse import urlparse, parse_qs
+                _parsed = urlparse(self.path)
+                _req_path = _parsed.path
+                
+                if _req_path == '/install.sh':
+                    _sh_file = '/opt/Bot_VIP/install.sh'
+                    if os.path.exists(_sh_file):
+                        with open(_sh_file, 'rb') as _f:
+                            _c = _f.read()
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                        self.send_header('Content-Length', str(len(_c)))
+                        self.end_headers()
+                        self.wfile.write(_c)
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                        self.wfile.write(b'install.sh not found')
+                    return
+                
+                if _req_path == '/api/download_bot':
+                    _qs = parse_qs(_parsed.query)
+                    _l_key = (_qs.get('key', [''])[0]).strip()
+                    _allowed = (_l_key.upper() == 'FREE' or _l_key == 'VIP-MASTER-OWNER-777')
+                    if not _allowed and 'DB_PATH' in globals():
+                        try:
+                            with sqlite3.connect(DB_PATH) as _conn:
+                                _row = _conn.execute('SELECT id, is_active FROM bot_licenses WHERE lic_key = ?', (_l_key,)).fetchone()
+                                if _row and _row[1] == 1:
+                                    _allowed = True
+                        except Exception:
+                            pass
+                    _arc = '/opt/Bot_VIP/bot.tar.gz'
+                    if _allowed and os.path.exists(_arc):
+                        with open(_arc, 'rb') as _f:
+                            _ac = _f.read()
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/gzip')
+                        self.send_header('Content-Disposition', 'attachment; filename="bot.tar.gz"')
+                        self.send_header('Content-Length', str(len(_ac)))
+                        self.end_headers()
+                        self.wfile.write(_ac)
+                    else:
+                        self.send_response(403)
+                        self.end_headers()
+                        self.wfile.write(b'{"status":"error","msg":"Access denied or archive missing"}')
+                    return
+                
+                if _req_path.startswith('/api/verify_license'):
+                    _qs = parse_qs(_parsed.query)
+                    _l_key = (_qs.get('key', [''])[0]).strip()
+                    _c_ip = (_qs.get('ip', [''])[0]).strip() or self.client_address[0]
+                    _c_adm = (_qs.get('admin_id', [''])[0]).strip()
+                    if _l_key.upper() == 'FREE':
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(b'{"status":"ok","tier":"free","msg":"Free version activated"}')
+                        return
+                    if 'DB_PATH' in globals():
+                        with sqlite3.connect(DB_PATH) as _conn:
+                            _row = _conn.execute('SELECT id, bound_ip, is_active FROM bot_licenses WHERE lic_key = ?', (_l_key,)).fetchone()
+                            if not _row or _row[2] == 0:
+                                self.send_response(403)
+                                self.send_header('Content-Type', 'application/json')
+                                self.end_headers()
+                                self.wfile.write(b'{"status":"error","msg":"Invalid or disabled license key"}')
+                                return
+                            _lid, _b_ip, _ = _row
+                            if _l_key != 'VIP-MASTER-OWNER-777':
+                                if _b_ip and _b_ip != _c_ip:
+                                    self.send_response(403)
+                                    self.send_header('Content-Type', 'application/json')
+                                    self.end_headers()
+                                    self.wfile.write(b'{"status":"error","msg":"License already bound to another server IP"}')
+                                    return
+                                if not _b_ip:
+                                    _conn.execute('UPDATE bot_licenses SET bound_ip = ?, bound_admin_id = ? WHERE id = ?', (_c_ip, _c_adm, _lid))
+                                    _conn.commit()
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(b'{"status":"ok","tier":"pro","msg":"PRO License verified"}')
+                        return
+                
                 if "/sub/" in self.path:
                     sub_id = self.path.split("/sub/")[-1].split("?")[0].strip("/")
                     with sqlite3.connect(DB_PATH) as conn:
@@ -3589,7 +3679,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "set_subdom"
         await query.edit_message_text(
             "🌐 <b>Настройка единого домена подписки (Subscription URL)</b>\n\n"
-            "Отправьте базовый URL (например: <code>https://sub.svoii-vpn.online:2096/sub</code>):",
+            "Отправьте базовый URL (например: <code>https://sub.svoii-vpn.online:2097/sub</code>):",
             parse_mode="HTML"
         )
         return
@@ -4222,7 +4312,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🤖 <b>Продажа и аренда защищенного бота (Bot_VIP)</b>\n"
             f"{lic_line}\n"
             "• Мульти-ключевая система «🔑 Мои ключи» с QR-кодами и подсчетом трафика\n"
-            "• Встроенный сервер единой подписки Sub-Aggregator (:2096)\n"
+            "• Встроенный сервер единой подписки Sub-Aggregator (:2097)\n"
             "• Обновление кода с GitHub прямо из панели бота в 1 клик\n"
             "• Встроенные платежные шлюзы: ЮKassa, Telegram Stars, CryptoPay, WATA, Platega, Cardlink\n"
             "• Аппаратная защита лицензии (HWID Lock) и защита ядра\n\n"
@@ -5000,7 +5090,7 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
         if not row:
             return
         k_uid, kname, sub_id = row
-        sub_prefix = get_setting("sub_domain_prefix", "") or "https://pl.svoii-vpn.online:2096/sub"
+        sub_prefix = get_setting("sub_domain_prefix", "") or "https://pl.svoii-vpn.online:2097/sub"
         sub_url = f"{sub_prefix.rstrip('/')}/{sub_id}"
         qr_payload = sub_url
 

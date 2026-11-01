@@ -5244,7 +5244,8 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
                 InlineKeyboardButton("⬅️ Назад", callback_data=f"ckm_wstep_gb_{uid}"),
                 InlineKeyboardButton("❌ Отмена", callback_data=f"ckm_back_u_{uid}")
             ]])
-            await query.edit_message_text("📅 <b>Срок действия</b>\n\nВведите количество дней (0 = без срока):", parse_mode="HTML", reply_markup=kb)
+            days_prompt = "📅 <b>Срок действия</b>\n\nВведите количество дней (0 = без срока):" if is_pro_version() else "📅 <b>Срок действия (FREE: от 1 до 60 дней)</b>\n\nВведите количество дней (максимум 60):"
+            await query.edit_message_text(days_prompt, parse_mode="HTML", reply_markup=kb)
             raise ApplicationHandlerStop
 
         # Шаг 5: Лимит устройств
@@ -5255,7 +5256,8 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
                 InlineKeyboardButton("⬅️ Назад", callback_data=f"ckm_wstep_days_{uid}"),
                 InlineKeyboardButton("❌ Отмена", callback_data=f"ckm_back_u_{uid}")
             ]])
-            await query.edit_message_text("💻 <b>Лимит устройств</b>\n\nВведите число от 1 до 999:", parse_mode="HTML", reply_markup=kb)
+            ip_prompt = "💻 <b>Лимит устройств</b>\n\nВведите число от 1 до 999:" if is_pro_version() else "💻 <b>Лимит устройств (FREE: 1 или 2)</b>\n\nВведите количество устройств (от 1 до 2):"
+            await query.edit_message_text(ip_prompt, parse_mode="HTML", reply_markup=kb)
             raise ApplicationHandlerStop
 
         # Шаг 6: Создание ключа в БД и на выбранном сервере 3X-UI
@@ -5481,27 +5483,58 @@ async def handle_all_custom_messages(update: Update, context: ContextTypes.DEFAU
                 InlineKeyboardButton("⬅️ Назад", callback_data=f"ckm_wstep_gb_{uid}"),
                 InlineKeyboardButton("❌ Отмена", callback_data=f"ckm_back_u_{uid}")
             ]])
-            await msg.reply_text("📅 <b>Срок действия</b>\n\nВведите количество дней (0 = без срока):", parse_mode="HTML", reply_markup=kb)
+            d_txt = "📅 <b>Срок действия</b>\n\nВведите количество дней (0 = без срока):" if is_pro_version() else "📅 <b>Срок действия (FREE-версия)</b>\n\nВведите количество дней <b>от 1 до 60</b>:"
+            await msg.reply_text(d_txt, parse_mode="HTML", reply_markup=kb)
             raise ApplicationHandlerStop
 
         if mode == "ckm_wiz_days":
             if not text.isdigit():
-                await msg.reply_text("❌ Введите количество дней числом (0 = без срока):")
+                await msg.reply_text("❌ Введите количество дней числом:")
                 raise ApplicationHandlerStop
-            wiz["days"] = int(text)
+            d_val = int(text)
+            if not is_pro_version() and not (1 <= d_val <= 60):
+                kb_up = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💎 Активировать PRO (Безлимит дней)", callback_data="lic_enter_pro")],
+                    [InlineKeyboardButton("❌ Отмена", callback_data=f"ckm_back_u_{uid}")]
+                ])
+                await msg.reply_text(
+                    "🔒 <b>Ограничение FREE-версии:</b> срок ключа можно выбрать только <b>от 1 до 60 дней</b> (без вечных ключей).\n\n"
+                    "Введите число от 1 до 60 или активируйте PRO-лицензию:",
+                    parse_mode="HTML",
+                    reply_markup=kb_up
+                )
+                raise ApplicationHandlerStop
+            wiz["days"] = d_val
             context.user_data["mode"] = "ckm_wiz_ip"
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton("⬅️ Назад", callback_data=f"ckm_wstep_days_{uid}"),
                 InlineKeyboardButton("❌ Отмена", callback_data=f"ckm_back_u_{uid}")
             ]])
-            await msg.reply_text("💻 <b>Лимит устройств</b>\n\nВведите число от 1 до 999:", parse_mode="HTML", reply_markup=kb)
+            ip_txt = "💻 <b>Лимит устройств</b>\n\nВведите число от 1 до 999:" if is_pro_version() else "💻 <b>Лимит устройств (FREE-версия)</b>\n\nВведите количество устройств <b>от 1 до 2</b>:"
+            await msg.reply_text(ip_txt, parse_mode="HTML", reply_markup=kb)
             raise ApplicationHandlerStop
 
         if mode == "ckm_wiz_ip":
-            if not text.isdigit() or not (1 <= int(text) <= 999):
+            if not text.isdigit():
+                await msg.reply_text("❌ Введите целое число:")
+                raise ApplicationHandlerStop
+            ip_val = int(text)
+            if not is_pro_version() and not (1 <= ip_val <= 2):
+                kb_up = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💎 Активировать PRO (До 999 устройств)", callback_data="lic_enter_pro")],
+                    [InlineKeyboardButton("❌ Отмена", callback_data=f"ckm_back_u_{uid}")]
+                ])
+                await msg.reply_text(
+                    "🔒 <b>Ограничение FREE-версии:</b> можно выбрать только <b>1 или 2 устройства</b> на ключ.\n\n"
+                    "Введите 1 или 2, либо активируйте PRO-лицензию:",
+                    parse_mode="HTML",
+                    reply_markup=kb_up
+                )
+                raise ApplicationHandlerStop
+            if is_pro_version() and not (1 <= ip_val <= 999):
                 await msg.reply_text("❌ Введите число от 1 до 999:")
                 raise ApplicationHandlerStop
-            wiz["ips"] = int(text)
+            wiz["ips"] = ip_val
             context.user_data["mode"] = None
             await show_ckm_confirm_screen(msg, context, edit=False)
             raise ApplicationHandlerStop

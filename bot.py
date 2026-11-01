@@ -4957,9 +4957,11 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
         if not any(b.callback_data == "cms_open_menu" for r in kb_rows for b in r):
             kb_rows.extend([
                 [InlineKeyboardButton("✏️ Редактирование текстов и баннеров", callback_data="cms_open_menu")],
-                [InlineKeyboardButton("🔐 Лицензии на бота (Продажи)", callback_data="lic_admin_menu")]
+                [InlineKeyboardButton("🔐 Лицензии на бота (Продажи)", callback_data="lic_admin_menu")],
+                [InlineKeyboardButton("🈴 На главную", callback_data="start_back_main")]
             ])
-        if not any(b.callback_data == "start_back_main" for r in kb_rows for b in r):
+if not any(b.callback_data == "start_back_main" for r in kb_rows for b in r):
+            pass
         await context.bot.send_message(chat_id=user.id, text=txt, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows))
         raise ApplicationHandlerStop
         try:

@@ -1,3 +1,4 @@
+import staff_roles
 from payment_cards import handle_payment_admin_callback, handle_payment_admin_text, render_gateway_card
 import autopay
 import os
@@ -2033,6 +2034,12 @@ def admin_dashboard_keyboard():
             InlineKeyboardButton("🧩 Расширения", callback_data="admin_ext_menu")
         ],
         [
+            InlineKeyboardButton(
+                "👥 Персонал (2 Адм / 3 Мод) " + ("💎" if staff_roles.is_pro_edition(get_setting) else "🔒 [FREE]"),
+                callback_data="admin_staff_menu"
+            )
+        ],
+        [
             InlineKeyboardButton("🔔 Настройки уведомлений (Что присылать)", callback_data="admin_notif_menu")
         ],
         [
@@ -2825,9 +2832,23 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==========================================================================
     # 👑 ПРОВЕРКА ПРАВ АДМИНИСТРАТОРА
     # ==========================================================================
-    if user.id != ADMIN_ID:
+    user_role = staff_roles.get_user_role(DB_PATH, user.id, ADMIN_ID, get_setting)
+    if user_role == "user":
         await notify_admin_event(user, "notify_security", "🚨 Попытка нажать админ-кнопку", data, context)
         await query.edit_message_text("⛔ Доступ запрещён.")
+        return
+
+    # Ограничения для Модераторов (3 слота): закрыты Сервера, Касса, Настройки и Персонал
+    if user_role == "moderator":
+        mod_forbidden = (
+            "admin_servers", "admin_srv", "admin_payments", "admin_pay_",
+            "admin_gw_", "admin_settings", "admin_staff", "admin_ext"
+        )
+        if data.startswith(mod_forbidden):
+            await query.answer("⛔ Раздел доступен только Администраторам бота.", show_alert=True)
+            return
+
+    if await staff_roles.handle_staff_callback(query, context, DB_PATH, ADMIN_ID, get_setting, set_setting):
         return
 
     if data == "admin_back_main":

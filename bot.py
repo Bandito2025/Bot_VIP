@@ -1,5 +1,5 @@
+from payment_cards import handle_payment_admin_callback, handle_payment_admin_text, render_gateway_card
 import autopay
-autopay.init_autopay_db(DB_PATH)
 import os
 import re
 import sys
@@ -2182,6 +2182,91 @@ async def precheckout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.pre_checkout_query
     await query.answer(ok=True)
 
+
+async def poll_pending_invoices_job(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        invoices = autopay.get_pending_invoices(DB_PATH)
+        if not invoices:
+            return
+        yoo_shop = get_setting("pay_yookassa_shop_id", "")
+        yoo_sec = get_setting("pay_yookassa_secret", "")
+        cp_token = get_setting("pay_cryptopay_secret", "")
+
+        for row in invoices:
+            inv_db_id, inv_id, provider, user_id, t_id, days, price, tariff_name, is_lic = row
+            is_paid = False
+
+            if provider == "yookassa" and yoo_shop and yoo_sec:
+                status = await autopay.check_yookassa_payment(yoo_shop, yoo_sec, inv_id)
+                if status == "succeeded":
+                    is_paid = True
+                elif status in ("canceled", "expired"):
+                    autopay.remove_invoice(DB_PATH, inv_id)
+                    continue
+
+            elif provider == "cryptopay" and cp_token:
+                status = await autopay.check_cryptopay_payment(cp_token, inv_id)
+                if status == "paid":
+                    is_paid = True
+                elif status in ("expired",):
+                    autopay.remove_invoice(DB_PATH, inv_id)
+                    continue
+
+            if is_paid:
+                autopay.remove_invoice(DB_PATH, inv_id)
+                record_payment(user_id, price, "RUB", f"Оплата тарифа: {tariff_name}")
+                with sqlite3.connect(DB_PATH) as conn:
+                    conn.execute("UPDATE users SET active_discount_pct = 0 WHERE user_id = ?", (user_id,))
+                    conn.commit()
+
+                if is_lic:
+                    now = datetime.now()
+                    lic_token = f"LIC-BOT-{user_id}-{secrets.token_hex(3).upper()} (до {(now + timedelta(days=days)).strftime('%Y-%m-%d')})"
+                    with sqlite3.connect(DB_PATH) as conn:
+                        conn.execute("UPDATE users SET is_vip = 1, bot_license = ? WHERE user_id = ?", (lic_token, user_id))
+                        conn.commit()
+                    try:
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=f"🎉 <b>Оплата прошла успешно!</b> Лицензия Бота активирована на {days} дн.\n\n🔐 Токен лицензии: <code>{lic_token}</code>",
+                            parse_mode="HTML",
+                            protect_content=True
+                        )
+                    except Exception as ex_u:
+                        logger.warning(f"Send bot lic err: {ex_u}")
+                else:
+                    try:
+                        k_id, until, sub_url, _ = await create_or_extend_user_key(user_id, days=days, create_new=True)
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"🎉 <b>Оплата получена!</b> Создан Ключ #{k_id} (до {until})\n\n"
+                                f"🔗 <b>Единая ссылка подписки:</b>\n<code>{html.escape(sub_url)}</code>\n\n"
+                                f"Все ваши ключи доступны в разделе «🔑 Мои ключи»."
+                            ),
+                            parse_mode="HTML",
+                            protect_content=True
+                        )
+                    except Exception as ex_k:
+                        logger.error(f"Key issue error: {ex_k}")
+
+                if get_setting("pay_notify_enabled", "1") == "1":
+                    try:
+                        await context.bot.send_message(
+                            chat_id=ADMIN_ID,
+                            text=(
+                                f"💰 <b>НОВАЯ АВТОМАТИЧЕСКАЯ ОПЛАТА ({provider.upper()})</b>\n\n"
+                                f"👤 Клиент: ID <code>{user_id}</code>\n"
+                                f"📋 Тариф: {html.escape(tariff_name)} ({days} дн.)\n"
+                                f"💵 Сумма: {price} ₽"
+                            ),
+                            parse_mode="HTML"
+                        )
+                    except Exception as ex_a:
+                        logger.warning(f"Admin notify err: {ex_a}")
+    except Exception as e:
+        logger.error(f"poll_pending_invoices_job error: {e}")
+
 async def successful_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     payment = update.message.successful_payment
@@ -2628,7 +2713,8 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text(f"⚠️ Ошибка выставления счета Telegram Stars: {e}")
             return
 
-        if p_key == "tgpayments":
+        # 1. TG Payments (send_invoice)
+        if p_key in ("tgpayments", "tg_payments"):
             prov_token = get_setting("pay_tgpayments_secret", "")
             if prov_token and ":" in prov_token:
                 try:
@@ -2644,123 +2730,77 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 except Exception as e:
                     logger.warning(f"TG payments invoice error: {e}")
+                    await query.answer("⚠️ Ошибка формирования счета TG payments.", show_alert=True)
+                    return
+            else:
+                await query.answer("⚠️ TG payments не настроен администратором.", show_alert=True)
+                return
 
-                if p_key == "yookassa":
-                    yoo_shop = get_setting("pay_yookassa_shop_id", "")
-                    yoo_sec = get_setting("pay_yookassa_secret", "")
-                    if yoo_shop and yoo_sec:
-                        try:
-                            idem = str(uuid.uuid4())
-                            post_body = {
-                                "amount": {"value": f"{pr_rub:.2f}", "currency": "RUB"},
-                                "confirmation": {"type": "redirect", "return_url": "https://t.me"},
-                                "capture": True,
-                                "description": f"{name} (ID {user.id})",
-                                "metadata": {"user_id": user.id, "tariff_id": t_id}
-                            }
-                            async with httpx.AsyncClient(timeout=6.0) as client:
-                                resp = await client.post(
-                                    "https://api.yookassa.ru/v1/payments",
-                                    auth=(yoo_shop, yoo_sec),
-                                    headers={"Idempotence-Key": idem},
-                                    json=post_body
-                                )
-                                res = resp.json()
-                                if resp.status_code == 200 and "confirmation" in res:
-                                    pay_url = res["confirmation"]["confirmation_url"]
-                                    pay_id = res["id"]
-                                    with sqlite3.connect(DB_PATH) as conn:
-                                        is_lic = 1 if "Бота" in grp else 0
-                                        conn.execute(
-                                            "INSERT INTO pending_invoices (inv_id, provider, user_id, t_id, days, price, tariff_name, is_bot_lic) VALUES (?, 'yookassa', ?, ?, ?, ?, ?, ?)",
-                                            (pay_id, user.id, t_id, days, pr_rub, name, is_lic)
-                                        )
-                                        conn.commit()
-                                    kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💳 Оплатить {pr_rub} ₽ (СБП / Карты)", url=pay_url)]])
-                                    await query.message.reply_text(
-                                        f"💳 <b>Счет на оплату: {html.escape(name)}</b>\n\n"
-                                        f"💰 Сумма: <code>{pr_rub} ₽</code>\n\n"
-                                        f"⚡️ <i>Оплатите по кнопке ниже. Ключ активируется автоматически сразу после оплаты.</i>",
-                                        parse_mode="HTML",
-                                        reply_markup=kb
-                                    )
-                                    return
-                        except Exception as e:
-                            logger.error(f"YooKassa Invoice Error: {e}")
-        if p_key == "cryptopay":
+        # 2. ЮKassa (СБП / Карты РФ через API v3)
+        if p_key == "yookassa":
+            yoo_shop = get_setting("pay_yookassa_shop_id", "")
+            yoo_sec = get_setting("pay_yookassa_secret", "")
+            if not yoo_shop or not yoo_sec or "example" in yoo_sec:
+                await query.answer("⚠️ ЮKassa временно не настроена администратором.", show_alert=True)
+                return
+            is_lic = 1 if "Бота" in grp else 0
+            ret_url = f"https://t.me/{(await context.bot.get_me()).username}"
+            pay_url, inv_id = await autopay.create_yookassa_payment(
+                shop_id=yoo_shop,
+                secret_key=yoo_sec,
+                amount_rub=pr_rub,
+                desc=f"{name} (ID {user.id})",
+                return_url=ret_url,
+                metadata={"user_id": user.id, "tariff_id": t_id}
+            )
+            if pay_url and inv_id:
+                autopay.register_invoice(DB_PATH, inv_id, "yookassa", user.id, t_id, days, pr_rub, name, is_lic)
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💳 Оплатить {pr_rub} ₽ (СБП / Карты)", url=pay_url)]])
+                await query.message.reply_text(
+                    f"💳 <b>Счет на оплату: {html.escape(name)}</b>\n\n"
+                    f"💰 <b>Сумма к оплате:</b> {pr_rub} ₽\n\n"
+                    f"⚡️ Оплатите по кнопке ниже через СБП или банковской картой.\n"
+                    f"Ключ активируется <b>автоматически</b> сразу после зачисления средств.",
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+                return
+            else:
+                await query.answer("⚠️ Ошибка связи со шлюзом ЮKassa. Проверьте Shop ID и Secret Key.", show_alert=True)
+                return
+
+        # 3. Crypto Pay (@CryptoBot)
+        if p_key in ("cryptopay", "cryptobot"):
             cp_token = get_setting("pay_cryptopay_secret", "")
             usdt_rate = float(get_setting("currency_usdt_rate", "95.0") or 95.0)
             usdt_amount = round(pr_rub / usdt_rate, 2)
-            if cp_token:
-                try:
-                    async with httpx.AsyncClient(timeout=6.0) as client:
-                        resp = await client.post(
-                            "https://pay.crypt.bot/api/createInvoice",
-                            headers={"Crypto-Pay-API-Token": cp_token},
-                            json={
-                                "asset": "USDT",
-                                "amount": str(usdt_amount),
-                                "description": f"{name} (ID {user.id})",
-                                "payload": f"tariff_{t_id}_{user.id}"
-                            }
-                        )
-                        r_data = resp.json()
-                        if r_data.get("ok"):
-                            pay_url = r_data["result"]["pay_url"]
-                            kb = InlineKeyboardMarkup([
-                                [InlineKeyboardButton(f"💎 Оплатить {usdt_amount} USDT в @CryptoBot", url=pay_url)],
-                                [InlineKeyboardButton("✅ Я оплатил (проверить)", callback_data=f"check_manual_pay_{t_id}")]
-                            ])
-                            await query.message.reply_text(
-                                f"💎 <b>Счет в Crypto Pay (@CryptoBot) создан!</b>\n"
-                                f"Сумма: <b>{usdt_amount} USDT</b>\nНажмите кнопку ниже для оплаты:",
-                                parse_mode="HTML",
-                                reply_markup=kb
-                            )
-                            return
-                except Exception as e:
-                    logger.warning(f"CryptoPay API error: {e}")
+            if not cp_token:
+                await query.answer("⚠️ Crypto Pay временно не настроен администратором.", show_alert=True)
+                return
+            is_lic = 1 if "Бота" in grp else 0
+            pay_url, inv_id = await autopay.create_cryptopay_payment(
+                token=cp_token,
+                amount_usdt=usdt_amount,
+                desc=f"{name} (ID {user.id})",
+                payload=f"tariff_{t_id}_{user.id}"
+            )
+            if pay_url and inv_id:
+                autopay.register_invoice(DB_PATH, inv_id, "cryptopay", user.id, t_id, days, pr_rub, name, is_lic)
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton(f"💎 Оплатить {usdt_amount} USDT в @CryptoBot", url=pay_url)]])
+                await query.message.reply_text(
+                    f"💎 <b>Счет Crypto Pay (@CryptoBot) создан!</b>\n\n"
+                    f"📋 <b>Тариф:</b> {html.escape(name)}\n"
+                    f"💰 <b>Сумма:</b> {usdt_amount} USDT ({pr_rub} ₽)\n\n"
+                    f"⚡️ Оплатите по кнопке ниже. Подписка активируется <b>автоматически</b> сразу после оплаты чека.",
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+                return
+            else:
+                await query.answer("⚠️ Ошибка создания счёта в CryptoBot. Проверьте токен.", show_alert=True)
+                return
 
-        p_title = PAYMENT_PROVIDERS.get(p_key, {}).get("title", p_key)
-        shop_info = get_setting(f"pay_{p_key}_secret", "") or (f"Shop ID: {get_setting('pay_yookassa_shop_id', '1368461')}" if p_key == "yookassa" else "СБП / Карта РФ")
-        kb_confirm = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Я оплатил (Отправить на проверку)", callback_data=f"check_manual_pay_{t_id}")]
-        ])
-        await query.message.reply_text(
-            f"💳 <b>Оплата через {html.escape(p_title)}</b>\n\n"
-            f"📋 Тариф: <b>{html.escape(name)}</b>\n"
-            f"💰 Сумма к оплате: <b>{pr_rub} ₽</b>\n"
-            f"🏦 Реквизиты / Шлюз: <code>{html.escape(shop_info)}</code>\n"
-            f"💬 Комментарий к платежу: <code>ID{user.id}</code>\n\n"
-            f"После перевода нажмите кнопку <b>«✅ Я оплатил»</b> ниже:",
-            parse_mode="HTML",
-            reply_markup=kb_confirm
-        )
-        return
-
-    if data.startswith("check_manual_pay_"):
-        t_id = int(data.split("_")[-1])
-        t_row = get_tariff_by_id(t_id)
-        t_name = t_row[2] if t_row else f"Тариф #{t_id}"
-        t_days = t_row[3] if t_row else 30
-        t_price = t_row[4] if t_row else 199
-
-        kb_adm = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"✅ Подтвердить ({t_price} ₽) и выдать ключ", callback_data=f"approve_pay_{user.id}_{t_days}_{t_price}")]
-        ])
-        await notify_admin_event(
-            user,
-            "notify_orders",
-            "💳 КЛИЕНТ НАЖАЛ «Я ОПЛАТИЛ»",
-            f"Тариф: {t_name} ({t_days} дн.)\nСумма: {t_price} ₽",
-            context,
-            reply_markup=kb_adm
-        )
-        await query.message.reply_text(
-            "⏳ <b>Запрос на подтверждение оплаты отправлен!</b>\n"
-            "Как только платеж будет проверен, новый ключ сразу появится в разделе <b>«🔑 Мои ключи»</b>.",
-            parse_mode="HTML"
-        )
+        await query.answer("⚠️ Выбранный способ оплаты временно недоступен.", show_alert=True)
         return
 
     if data == "manual_order_vpn":
@@ -3470,35 +3510,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
         return
 
-    if data.startswith("admin_pay_cfg_"):
-        p_key = data.replace("admin_pay_cfg_", "")
-        p_info = PAYMENT_PROVIDERS.get(p_key, {"title": p_key})
-        is_on = get_setting(f"pay_{p_key}_enabled", "0") == "1"
-        st_str = "🟢 Включен" if is_on else "⚪️ Выключен"
-        secret_val = get_setting(f"pay_{p_key}_secret", "не задан")
-        shop_line = f"\n🆔 <b>Shop ID:</b> <code>{html.escape(get_setting('pay_yookassa_shop_id', '1368461'))}</code>" if p_key == "yookassa" else ""
-
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Включить / Выключить этот способ", callback_data=f"admin_pay_flip_{p_key}")],
-            [InlineKeyboardButton("🔑 Указать API-токен / Реквизиты / Shop ID", callback_data=f"admin_pay_secret_{p_key}")],
-            [InlineKeyboardButton("⬅️ Назад в Настройки оплаты", callback_data="admin_payments_menu")]
-        ])
-        await query.edit_message_text(
-            f"💳 <b>Настройка шлюза: {html.escape(p_info['title'])}</b>\n\n"
-            f"📡 <b>Статус:</b> {st_str}{shop_line}\n"
-            f"🔐 <b>Токен / Реквизиты:</b> <code>{html.escape(secret_val)}</code>\n\n"
-            f"Выберите действие:",
-            parse_mode="HTML",
-            reply_markup=kb
-        )
-        return
-
-    if data.startswith("admin_pay_flip_"):
-        p_key = data.replace("admin_pay_flip_", "")
-        cur_v = get_setting(f"pay_{p_key}_enabled", "0")
-        set_setting(f"pay_{p_key}_enabled", "0" if cur_v == "1" else "1")
-        text_out, kb_out = render_payment_settings_screen()
-        await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+    if await handle_payment_admin_callback(query, context, get_setting, set_setting):
         return
 
     if data.startswith("admin_pay_secret_"):
@@ -3957,6 +3969,8 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Обработка текстовых сообщений ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await handle_payment_admin_text(update.message, update.effective_user, context, set_setting, get_setting, ADMIN_ID):
+        return
     user = update.effective_user
     msg = update.message
     text = msg.text or ""
@@ -5894,6 +5908,7 @@ if __name__ == "__main__":
         app.job_queue.run_daily(daily_backup_job, time=time(hour=3, minute=0))
         app.job_queue.run_repeating(expire_vips_job, interval=3600, first=60)
         app.job_queue.run_repeating(check_expiry_reminders_job, interval=1800, first=45)
+    app.job_queue.run_repeating(poll_pending_invoices_job, interval=5, first=10)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmd))

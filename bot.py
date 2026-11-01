@@ -2838,17 +2838,12 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("⛔ Доступ запрещён.")
         return
 
-    # Ограничения для Модераторов (3 слота): закрыты Сервера, Касса, Настройки и Персонал
-    if user_role == "moderator":
-        mod_forbidden = (
-            "admin_servers", "admin_srv", "admin_payments", "admin_pay_",
-            "admin_gw_", "admin_settings", "admin_staff", "admin_ext"
-        )
-        if data.startswith(mod_forbidden):
-            await query.answer("⛔ Раздел доступен только Администраторам бота.", show_alert=True)
-            return
-
     if await staff_roles.handle_staff_callback(query, context, DB_PATH, ADMIN_ID, get_setting, set_setting):
+        return
+
+    allowed, deny_reason = staff_roles.check_staff_permission(DB_PATH, user.id, ADMIN_ID, data, get_setting)
+    if not allowed:
+        await query.answer(deny_reason, show_alert=True)
         return
 
     if data == "admin_back_main":

@@ -3559,14 +3559,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         _, grp, name, days, pr_rub, pr_stars = t_row
         d_lbl = "Без срока" if days == 0 else f"{days} дн."
-        t_text = (
-            f"⚙️ <b>Редактирование тарифа #{t_id}</b>\n\n"
-            f"📁 <b>Группа:</b> {html.escape(grp)}\n"
-            f"🏷 <b>Название:</b> {html.escape(name)}\n"
-            f"⏳ <b>Длительность:</b> {d_lbl}\n"
-            f"💰 <b>Цена:</b> {pr_rub} ₽ ({pr_stars} ⭐️)\n\n"
-            f"<i>Выберите параметр для изменения:</i>"
-        )
+        t_text = f"⚙️ <b>Редактирование тарифа #{t_id}</b>\n\n📁 Группа: {html.escape(grp)}\n🏷 Название: {html.escape(name)}\n⏳ Длительность: {d_lbl}\n💰 Цена: {pr_rub} ₽ ({pr_stars} ⭐️)\n\nВыберите параметр для изменения:"
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("💰 Изменить цену (₽)", callback_data=f"admin_tedit_param_price_{t_id}"),
              InlineKeyboardButton("⏳ Изменить срок", callback_data=f"admin_tedit_param_days_{t_id}")],
@@ -4151,21 +4144,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if t_row:
                 _, grp, name, days, pr_rub, pr_stars = t_row
                 d_lbl = "Без срока" if days == 0 else f"{days} дн."
-                t_text = (
-                    f"⚙️ <b>Редактирование тарифа #{t_id}</b>
-
-"
-                    f"📁 <b>Группа:</b> {html.escape(grp)}
-"
-                    f"🏷 <b>Название:</b> {html.escape(name)}
-"
-                    f"⏳ <b>Длительность:</b> {d_lbl}
-"
-                    f"💰 <b>Цена:</b> {pr_rub} ₽ ({pr_stars} ⭐️)
-
-"
-                    f"<i>Выберите параметр для изменения:</i>"
-                )
+                t_text = f"⚙️ <b>Редактирование тарифа #{t_id}</b>\n\n📁 Группа: {html.escape(grp)}\n🏷 Название: {html.escape(name)}\n⏳ Длительность: {d_lbl}\n💰 Цена: {pr_rub} ₽ ({pr_stars} ⭐️)\n\nВыберите параметр для изменения:"
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("💰 Изменить цену (₽)", callback_data=f"admin_tedit_param_price_{t_id}"),
                      InlineKeyboardButton("⏳ Изменить срок", callback_data=f"admin_tedit_param_days_{t_id}")],

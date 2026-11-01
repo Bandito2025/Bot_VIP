@@ -2,9 +2,11 @@ import uuid
 import base64
 import sqlite3
 import logging
+import asyncio
 import httpx
 
 logger = logging.getLogger(__name__)
+_POLLING_LOCK = asyncio.Lock()
 
 def init_autopay_db(db_path: str):
     with sqlite3.connect(db_path) as conn:
@@ -36,6 +38,12 @@ def remove_invoice(db_path: str, inv_id: str):
     with sqlite3.connect(db_path) as conn:
         conn.execute("DELETE FROM pending_invoices WHERE inv_id = ?", (str(inv_id),))
         conn.commit()
+
+def consume_invoice_atomic(db_path: str, inv_id: str) -> bool:
+    with sqlite3.connect(db_path) as conn:
+        cur = conn.execute("DELETE FROM pending_invoices WHERE inv_id = ?", (str(inv_id),))
+        conn.commit()
+        return cur.rowcount > 0
 
 def cleanup_expired_invoices(db_path: str, hours: int = 24):
     with sqlite3.connect(db_path) as conn:

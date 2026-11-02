@@ -2848,7 +2848,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "admin_ext_menu": "🧩 PRO-Расширения",
         "admin_notif_menu": "🔔 Настройки уведомлений"
     }
-        if data in ("admin_add_server", "admin_srv_add") and not staff_roles.is_pro_edition(get_setting):
+    if data in ("admin_add_server", "admin_srv_add") and not staff_roles.is_pro_edition(get_setting):
         if len(get_all_servers_full()) >= 1:
             l_text, l_kb = staff_roles.render_pro_locked_screen("🖥 Мульти-серверность (более 1 сервера)")
             await staff_roles.safe_edit(query, l_text, l_kb)

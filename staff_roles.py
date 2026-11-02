@@ -45,6 +45,9 @@ def init_staff_db(db_path: str):
             conn.execute("ALTER TABLE bot_staff ADD COLUMN perms TEXT DEFAULT '{}';")
         conn.commit()
 
+def is_dev_server() -> bool:
+    return os.path.exists('/opt/Bot_VIP/.owner_dev')
+
 def is_pro_edition(get_setting_fn) -> bool:
     if os.path.exists("/opt/Bot_VIP/.pro_unlocked"):
         return True
@@ -394,7 +397,7 @@ def render_pro_locked_screen(section_title: str):
     )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔑 Ввести ключ PRO-лицензии", callback_data="admin_staff_enter_lic")],
-        [InlineKeyboardButton("💎 Активировать PRO (Тест владельца)", callback_data="admin_staff_toggle_tier")],
+        ([InlineKeyboardButton("💎 Активировать PRO (Тест владельца)", callback_data="admin_staff_toggle_tier")] if is_dev_server() else []),
         [InlineKeyboardButton("⬅️ Назад в админ-панель", callback_data="admin_back_main")]
     ])
     return text, kb

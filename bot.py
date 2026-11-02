@@ -2042,9 +2042,7 @@ def admin_dashboard_keyboard():
         [
             InlineKeyboardButton(f"🔔 Настройки уведомлений {badge}", callback_data="admin_notif_menu")
         ],
-        [
-            InlineKeyboardButton(tier_switch_label, callback_data="admin_staff_toggle_tier")
-        ],
+        *([[InlineKeyboardButton(tier_switch_label, callback_data="admin_staff_toggle_tier")]] if staff_roles.is_dev_server() else []),
         [
             InlineKeyboardButton("🈴 На главную", callback_data="admin_back_main")
         ]
@@ -2850,6 +2848,12 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "admin_ext_menu": "🧩 PRO-Расширения",
         "admin_notif_menu": "🔔 Настройки уведомлений"
     }
+        if data in ("admin_add_server", "admin_srv_add") and not staff_roles.is_pro_edition(get_setting):
+        if len(get_all_servers_full()) >= 1:
+            l_text, l_kb = staff_roles.render_pro_locked_screen("🖥 Мульти-серверность (более 1 сервера)")
+            await staff_roles.safe_edit(query, l_text, l_kb)
+            return
+
     if data in pro_locked_map and not staff_roles.is_pro_edition(get_setting):
         l_text, l_kb = staff_roles.render_pro_locked_screen(pro_locked_map[data])
         await staff_roles.safe_edit(query, l_text, l_kb)

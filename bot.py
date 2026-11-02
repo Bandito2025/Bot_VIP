@@ -2005,7 +2005,7 @@ def main_keyboard(user_id: int):
 def build_admin_dashboard_text(mon_status: str = "✅ Активен (3x-ui + Proxy 2.7.0)") -> str:
     m = get_dashboard_metrics()
     return (
-        f"⚙️ <b>Админ-панель</b>\n" + ("💎 <b>Лицензия:</b> <code>PRO Edition</code>\n\n" if staff_roles.is_pro_edition(get_setting) else "🔒 <b>Лицензия:</b> <code>FREE Edition (Урезанная)</code>\n\n")
+        ("⚙️ <b>Админ-панель</b>\n💎 <b>Лицензия:</b> <code>PRO Edition</code>\n\n" if staff_roles.is_pro_edition(get_setting) else "⚙️ <b>Админ-панель</b>\n🔒 <b>Лицензия:</b> <code>FREE Edition (Урезанная)</code>\n\n") +
         f"📊 Мониторинг: {mon_status}\n\n"
         f"💰 <b>За 24 часа</b>\n"
         f"Оплат: {m['pay_count_24h']}\n"

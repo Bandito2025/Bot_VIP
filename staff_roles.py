@@ -1,12 +1,13 @@
+import os
 import sqlite3
 import json
 import html
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 
 MAX_EXTRA_ADMINS = 2
 MAX_MODERATORS = 3
 
-# Набор прав, которые можно включать/выключать каждому сотруднику
 PERMISSIONS_META = {
     "users": ("👥 Пользователи и Ключи", "Просмотр базы, выдача/удаление ключей"),
     "marketing": ("📣 Маркетинг и Промо", "Рассылки, купоны и промокоды"),
@@ -15,13 +16,11 @@ PERMISSIONS_META = {
     "settings": ("⚙️ Настройки бота", "Глобальные параметры, тексты и расширения")
 }
 
-# Права по умолчанию при добавлении
 DEFAULT_PERMS = {
     "admin": {"users": True, "marketing": True, "servers": True, "payments": True, "settings": True},
     "moderator": {"users": True, "marketing": True, "servers": False, "payments": False, "settings": False}
 }
 
-# Привязка разделов callback_data к ключам прав
 SECTION_PERM_MAP = {
     "users": ("admin_users", "admin_user_", "admin_key_"),
     "marketing": ("admin_marketing", "admin_promo", "admin_coupon", "admin_broadcast"),
@@ -41,16 +40,22 @@ def init_staff_db(db_path: str):
                 added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-        # Авто-миграция, если таблица уже была создана без колонки perms
         cols = [r[1] for r in conn.execute("PRAGMA table_info(bot_staff);").fetchall()]
         if "perms" not in cols:
             conn.execute("ALTER TABLE bot_staff ADD COLUMN perms TEXT DEFAULT '{}';")
         conn.commit()
 
 def is_pro_edition(get_setting_fn) -> bool:
-    tier = str(get_setting_fn("bot_edition_tier", "free")).lower().strip()
-    lic = str(get_setting_fn("bot_license_key", "")).strip()
-    return tier in ("pro", "vip", "full", "business") or lic.startswith("LIC-BOT-")
+    if os.path.exists("/opt/Bot_VIP/.pro_unlocked"):
+        return True
+    try:
+        tier = str(get_setting_fn("bot_edition_tier", "free")).lower().strip()
+        lic = str(get_setting_fn("bot_license_key", "")).strip()
+        if tier in ("pro", "vip", "full", "business") or lic.startswith("LIC-BOT-"):
+            return True
+    except Exception:
+        pass
+    return False
 
 def get_staff_list(db_path: str, role: str = None):
     init_staff_db(db_path)
@@ -86,7 +91,6 @@ def get_user_role(db_path: str, user_id: int, owner_id: int, get_setting_fn=None
     return member["role"] if member else "user"
 
 def check_staff_permission(db_path: str, user_id: int, owner_id: int, callback_data: str, get_setting_fn=None) -> tuple[bool, str]:
-    """Проверяет, разрешено ли сотруднику нажимать данную кнопку."""
     if user_id == owner_id:
         return True, ""
     if get_setting_fn and not is_pro_edition(get_setting_fn):
@@ -96,7 +100,6 @@ def check_staff_permission(db_path: str, user_id: int, owner_id: int, callback_d
     if not member:
         return False, "⛔ Доступ запрещён."
 
-    # Секретные ключи шлюзов и управление персоналом доступны ТОЛЬКО Главному Владельцу
     if callback_data.startswith(("admin_staff_", "admin_pay_cfg_", "admin_pay_inp_", "admin_pay_toggle_")):
         return False, "⛔ Изменять реквизиты шлюзов и состав команды может только Главный Владелец."
 
@@ -125,7 +128,7 @@ def add_staff_member(db_path: str, user_id: int, role: str, label: str = "") -> 
             (user_id, role, label.strip()[:32], default_p)
         )
         conn.commit()
-    return True, "✅ Сотрудник добавлен! Нажмите на него в списке, чтобы настроить права."
+    return True, "✅ Сотрудник добавлен!"
 
 def toggle_staff_perm(db_path: str, user_id: int, perm_key: str) -> bool:
     member = get_staff_member(db_path, user_id)
@@ -146,12 +149,12 @@ def switch_staff_role(db_path: str, user_id: int) -> tuple[bool, str]:
     current = get_staff_list(db_path, new_role)
     limit = MAX_EXTRA_ADMINS if new_role == "admin" else MAX_MODERATORS
     if len(current) >= limit:
-        return False, f"⚠️ Нет свободных слотов для роли ({limit} макс.)"
+        return False, f"⚠️ Нет свободных слотов для роли"
     new_perms = json.dumps(DEFAULT_PERMS[new_role])
     with sqlite3.connect(db_path) as conn:
         conn.execute("UPDATE bot_staff SET role = ?, perms = ? WHERE user_id = ?", (new_role, new_perms, user_id))
         conn.commit()
-    return True, f"Роль изменена на {'Админ' if new_role == 'admin' else 'Модератор'}"
+    return True, f"Роль изменена"
 
 def remove_staff_member(db_path: str, user_id: int):
     with sqlite3.connect(db_path) as conn:
@@ -169,12 +172,12 @@ def render_staff_menu(db_path: str, owner_id: int, get_setting_fn):
             "━━━━━━━━━━━━━━\n"
             "⚠️ <b>Функция закрыта во FREE-версии бота!</b>\n\n"
             "В полной <b>PRO / VIP версии</b> вам доступны:\n"
-            f"• 👔 <b>До {MAX_EXTRA_ADMINS} Администраторов</b> с гибкой настройкой прав\n"
-            f"• 🛡 <b>До {MAX_MODERATORS} Модераторов</b> (выдача ключей, рассылки, работа с базой без доступа к вашим кошелькам)\n"
-            "• 🎛 <b>Индивидуальные тумблеры прав</b> (вкл/выкл разделов для каждого сотрудника)\n\n"
-            "💎 <i>Активируйте PRO-лицензию для разблокировки раздела.</i>"
+            f"• 👔 До {MAX_EXTRA_ADMINS} Администраторов\n"
+            f"• 🛡 До {MAX_MODERATORS} Модераторов\n\n"
+            "💎 <i>Активируйте PRO-лицензию для разблокировки.</i>"
         )
         kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💎 Активировать PRO (Владелец)", callback_data="admin_staff_toggle_tier")],
             [InlineKeyboardButton("🔑 Ввести ключ PRO-лицензии", callback_data="admin_staff_enter_lic")],
             [InlineKeyboardButton("⬅️ Назад в админ-панель", callback_data="admin_back_main")]
         ])
@@ -183,25 +186,17 @@ def render_staff_menu(db_path: str, owner_id: int, get_setting_fn):
     lines = [
         "👥 <b>Персонал и Права доступа [PRO]</b>",
         "━━━━━━━━━━━━━━",
-        f"👑 <b>Владелец:</b> <code>{owner_id}</code> (Полный доступ)\n",
+        f"👑 <b>Владелец:</b> <code>{owner_id}</code>\n",
         f"👔 <b>Администраторы ({len(admins)}/{MAX_EXTRA_ADMINS}):</b>"
     ]
-    if admins:
-        for uid, _, lbl, _ in admins:
-            note = f" — {html.escape(lbl)}" if lbl else ""
-            lines.append(f"  • <code>{uid}</code>{note}")
-    else:
-        lines.append("  • <i>Слоты свободны</i>")
+    for uid, _, lbl, _ in admins:
+        note = f" — {html.escape(lbl)}" if lbl else ""
+        lines.append(f"  • <code>{uid}</code>{note}")
 
     lines.append(f"\n🛡 <b>Модераторы ({len(mods)}/{MAX_MODERATORS}):</b>")
-    if mods:
-        for uid, _, lbl, _ in mods:
-            note = f" — {html.escape(lbl)}" if lbl else ""
-            lines.append(f"  • <code>{uid}</code>{note}")
-    else:
-        lines.append("  • <i>Слоты свободны</i>")
-
-    lines.append("\n👇 <i>Нажмите на сотрудника ниже, чтобы включить или отключить ему отдельные права:</i>")
+    for uid, _, lbl, _ in mods:
+        note = f" — {html.escape(lbl)}" if lbl else ""
+        lines.append(f"  • <code>{uid}</code>{note}")
 
     buttons = []
     for uid, _, lbl, _ in admins:
@@ -214,13 +209,13 @@ def render_staff_menu(db_path: str, owner_id: int, get_setting_fn):
 
     add_row = []
     if len(admins) < MAX_EXTRA_ADMINS:
-        add_row.append(InlineKeyboardButton(f"➕ Админ ({len(admins)}/{MAX_EXTRA_ADMINS})", callback_data="admin_staff_add_admin"))
+        add_row.append(InlineKeyboardButton(f"➕ Админ", callback_data="admin_staff_add_admin"))
     if len(mods) < MAX_MODERATORS:
-        add_row.append(InlineKeyboardButton(f"➕ Модератор ({len(mods)}/{MAX_MODERATORS})", callback_data="admin_staff_add_mod"))
+        add_row.append(InlineKeyboardButton(f"➕ Модератор", callback_data="admin_staff_add_mod"))
     if add_row:
         buttons.append(add_row)
 
-    buttons.append([InlineKeyboardButton("🔒 Переключить в FREE-режим (тест замка)", callback_data="admin_staff_toggle_tier")])
+    buttons.append([InlineKeyboardButton("🔒 Переключить в FREE-режим", callback_data="admin_staff_toggle_tier")])
     buttons.append([InlineKeyboardButton("⬅️ Назад в админ-панель", callback_data="admin_back_main")])
 
     return "\n".join(lines), InlineKeyboardMarkup(buttons)
@@ -231,36 +226,43 @@ def render_member_permissions_card(db_path: str, target_uid: int):
         return "❌ Сотрудник не найден.", InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="admin_staff_menu")]])
 
     role_badge = "👔 Администратор" if member["role"] == "admin" else "🛡 Модератор"
-    lbl = f" ({html.escape(member['label'])})" if member["label"] else ""
     perms = member["perms"]
 
     lines = [
         f"🎛 <b>Настройка прав сотрудника</b>",
         "━━━━━━━━━━━━━━",
-        f"👤 <b>ID:</b> <code>{target_uid}</code>{lbl}",
-        f"🔰 <b>Роль:</b> {role_badge}\n",
-        "<b>Доступные разделы управления:</b>"
+        f"👤 <b>ID:</b> <code>{target_uid}</code>",
+        f"🔰 <b>Роль:</b> {role_badge}\n"
     ]
 
     buttons = []
     for p_key, (p_title, p_desc) in PERMISSIONS_META.items():
         is_on = perms.get(p_key, False)
         status_icon = "🟢 Вкл" if is_on else "🔴 Выкл"
-        lines.append(f"• {p_title}: <b>{status_icon}</b>\n  <i>({p_desc})</i>")
+        lines.append(f"• {p_title}: <b>{status_icon}</b>")
         buttons.append([
             InlineKeyboardButton(
-                f"{'🟢' if is_on else '🔴'} {p_title} — {'ВКЛ' if is_on else 'ВЫКЛ'}",
+                f"{'🟢' if is_on else '🔴'} {p_title}",
                 callback_data=f"admin_staff_perm_{target_uid}_{p_key}"
             )
         ])
 
     buttons.append([
-        InlineKeyboardButton("🔄 Сменить роль (Адм ⇄ Мод)", callback_data=f"admin_staff_role_{target_uid}"),
+        InlineKeyboardButton("🔄 Сменить роль", callback_data=f"admin_staff_role_{target_uid}"),
         InlineKeyboardButton("🗑 Удалить", callback_data=f"admin_staff_del_{target_uid}")
     ])
     buttons.append([InlineKeyboardButton("⬅️ К списку персонала", callback_data="admin_staff_menu")])
 
     return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+async def safe_edit(query, text, reply_markup=None, parse_mode="HTML"):
+    try:
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            await query.answer("Уже актуально 👌")
+        else:
+            raise
 
 async def handle_staff_callback(query, context, db_path: str, owner_id: int, get_setting_fn, set_setting_fn) -> bool:
     data = query.data or ""
@@ -268,82 +270,77 @@ async def handle_staff_callback(query, context, db_path: str, owner_id: int, get
         return False
 
     if query.from_user.id != owner_id:
-        await query.answer("⛔ Управлять правами команды может только Главный Владелец.", show_alert=True)
+        await query.answer("⛔ Доступно только Владельцу.", show_alert=True)
         return True
 
     if data == "admin_staff_menu":
         text, kb = render_staff_menu(db_path, owner_id, get_setting_fn)
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        await safe_edit(query, text, kb)
         return True
 
     if data == "admin_staff_toggle_tier":
         curr = is_pro_edition(get_setting_fn)
-        set_setting_fn("bot_edition_tier", "free" if curr else "pro")
-        await query.answer("🔒 Включен режим FREE" if curr else "💎 Включен режим PRO", show_alert=True)
+        if curr:
+            if os.path.exists("/opt/Bot_VIP/.pro_unlocked"):
+                os.remove("/opt/Bot_VIP/.pro_unlocked")
+            set_setting_fn("bot_edition_tier", "free")
+            await query.answer("🔒 Включен режим FREE (тест замка)", show_alert=True)
+        else:
+            with open("/opt/Bot_VIP/.pro_unlocked", "w") as f:
+                f.write("PRO_ACTIVE=1\n")
+            set_setting_fn("bot_edition_tier", "pro")
+            await query.answer("💎 PRO-версия активирована!", show_alert=True)
         text, kb = render_staff_menu(db_path, owner_id, get_setting_fn)
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        await safe_edit(query, text, kb)
         return True
 
     if data == "admin_staff_enter_lic":
         context.user_data["staff_input_mode"] = "activate_pro"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Отмена", callback_data="admin_staff_menu")]])
-        await query.edit_message_text(
-            "🔑 <b>Активация PRO-режима</b>\n\n"
-            "Отправьте ключ лицензии (<code>LIC-BOT-...</code>) или слово <code>PRO</code>:",
-            parse_mode="HTML",
-            reply_markup=kb
-        )
+        await safe_edit(query, "🔑 Отправьте кодовое слово <b>PRO</b>:", kb)
         return True
 
     if not is_pro_edition(get_setting_fn):
-        await query.answer("🔒 Функция заблокирована во FREE-версии бота!", show_alert=True)
+        await query.answer("🔒 Функция заблокирована во FREE-версии!", show_alert=True)
         return True
 
     if data.startswith("admin_staff_cfg_"):
         target_uid = int(data.replace("admin_staff_cfg_", ""))
         text, kb = render_member_permissions_card(db_path, target_uid)
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        await safe_edit(query, text, kb)
         return True
 
     if data.startswith("admin_staff_perm_"):
         rest = data.replace("admin_staff_perm_", "")
         uid_str, perm_key = rest.split("_", 1)
         target_uid = int(uid_str)
-        new_state = toggle_staff_perm(db_path, target_uid, perm_key)
-        p_title = PERMISSIONS_META.get(perm_key, (perm_key,))[0]
-        await query.answer(f"{'🟢 Включено' if new_state else '🔴 Отключено'}: {p_title}")
+        toggle_staff_perm(db_path, target_uid, perm_key)
+        await query.answer("Сохранено")
         text, kb = render_member_permissions_card(db_path, target_uid)
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        await safe_edit(query, text, kb)
         return True
 
     if data.startswith("admin_staff_role_"):
         target_uid = int(data.replace("admin_staff_role_", ""))
-        ok, msg = switch_staff_role(db_path, target_uid)
-        await query.answer(msg, show_alert=True)
+        switch_staff_role(db_path, target_uid)
+        await query.answer("Роль изменена")
         text, kb = render_member_permissions_card(db_path, target_uid)
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        await safe_edit(query, text, kb)
         return True
 
     if data in ("admin_staff_add_admin", "admin_staff_add_mod"):
         role = "admin" if data.endswith("_admin") else "moderator"
-        role_title = "Администратора (макс. 2)" if role == "admin" else "Модератора (макс. 3)"
         context.user_data["staff_input_mode"] = f"add_{role}"
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Отмена", callback_data="admin_staff_menu")]])
-        await query.edit_message_text(
-            f"👤 <b>Добавление {role_title}</b>\n\n"
-            "Отправьте в чат <b>Telegram ID</b> сотрудника (и имя через пробел).\n"
-            "Пример: <code>123456789 Алексей</code>",
-            parse_mode="HTML",
-            reply_markup=kb
-        )
+        await safe_edit(query, "👤 Отправьте в чат <b>Telegram ID</b> сотрудника:", kb)
         return True
 
     if data.startswith("admin_staff_del_"):
         target_id = int(data.replace("admin_staff_del_", ""))
         remove_staff_member(db_path, target_id)
-        await query.answer(f"🗑 Сотрудник {target_id} удален", show_alert=True)
+        await query.answer("Удалено", show_alert=True)
         text, kb = render_staff_menu(db_path, owner_id, get_setting_fn)
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=kb)
+        await safe_edit(query, text, kb)
         return True
 
     return False
@@ -354,21 +351,21 @@ async def handle_staff_text_input(update, context, db_path: str, owner_id: int, 
         return False
 
     raw = (update.message.text or "").strip()
-    kb_back = InlineKeyboardMarkup([[InlineKeyboardButton("👥 К управлению персоналом", callback_data="admin_staff_menu")]])
+    kb_back = InlineKeyboardMarkup([[InlineKeyboardButton("👥 К персоналу", callback_data="admin_staff_menu")]])
 
     if mode == "activate_pro":
         context.user_data.pop("staff_input_mode", None)
         if raw.upper() == "PRO" or raw.startswith("LIC-BOT-"):
             set_setting_fn("bot_edition_tier", "pro")
-            await update.message.reply_text("🎉 <b>PRO-версия активирована!</b>\nТеперь вы можете добавлять до 2 Админов и 3 Модераторов и настраивать их права.", parse_mode="HTML", reply_markup=kb_back)
+            await update.message.reply_text("🎉 <b>PRO-версия активирована!</b>", parse_mode="HTML", reply_markup=kb_back)
         else:
-            await update.message.reply_text("❌ Неверный ключ лицензии.", parse_mode="HTML", reply_markup=kb_back)
+            await update.message.reply_text("❌ Неверный ключ.", parse_mode="HTML", reply_markup=kb_back)
         return True
 
     if mode in ("add_admin", "add_moderator"):
         parts = raw.split(maxsplit=1)
         if not parts or not parts[0].isdigit():
-            await update.message.reply_text("⚠️ Введите числовой Telegram ID (например: <code>987654321 Макс</code>).", parse_mode="HTML", reply_markup=kb_back)
+            await update.message.reply_text("⚠️ Введите числовой Telegram ID.", parse_mode="HTML", reply_markup=kb_back)
             return True
 
         target_uid = int(parts[0])
@@ -377,11 +374,27 @@ async def handle_staff_text_input(update, context, db_path: str, owner_id: int, 
 
         context.user_data.pop("staff_input_mode", None)
         ok, msg = add_staff_member(db_path, target_uid, role, label)
-        kb_open = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎛 Настроить права сотрудника", callback_data=f"admin_staff_cfg_{target_uid}")],
-            [InlineKeyboardButton("👥 К списку персонала", callback_data="admin_staff_menu")]
-        ]) if ok else kb_back
-        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=kb_open)
+        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=kb_back)
         return True
 
     return False
+
+
+def render_pro_locked_screen(section_title: str):
+    text = (
+        f"🔒 <b>Раздел «{section_title}» доступен только в PRO-версии!</b>\n"
+        "━━━━━━━━━━━━━━\n"
+        "⚠️ Вы используете базовую <b>FREE-версию</b> бота.\n\n"
+        "💎 <b>Что открывает PRO / VIP лицензия:</b>\n"
+        "• 👥 <b>Персонал (2 Адм / 3 Мод)</b> — командная работа и тумблеры прав\n"
+        "• 📣 <b>Маркетинг и Промо</b> — массовые рассылки, купоны и промокоды\n"
+        "• 🧩 <b>PRO-Расширения</b> — анти-бан зеркала, возврат брошенных корзин, AI-агент\n"
+        "• 🔔 <b>Гибкие уведомления</b> — тонкая настройка оповещений в реальном времени\n\n"
+        "<i>Активируйте лицензионный ключ, чтобы снять все ограничения:</i>"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔑 Ввести ключ PRO-лицензии", callback_data="admin_staff_enter_lic")],
+        [InlineKeyboardButton("💎 Активировать PRO (Тест владельца)", callback_data="admin_staff_toggle_tier")],
+        [InlineKeyboardButton("⬅️ Назад в админ-панель", callback_data="admin_back_main")]
+    ])
+    return text, kb

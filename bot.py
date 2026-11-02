@@ -2005,7 +2005,7 @@ def main_keyboard(user_id: int):
 def build_admin_dashboard_text(mon_status: str = "✅ Активен (3x-ui + Proxy 2.7.0)") -> str:
     m = get_dashboard_metrics()
     return (
-        f"⚙️ <b>Админ-панель</b>\n\n"
+        f"⚙️ <b>Админ-панель</b>\n" + ("💎 <b>Лицензия:</b> <code>PRO Edition</code>\n\n" if staff_roles.is_pro_edition(get_setting) else "🔒 <b>Лицензия:</b> <code>FREE Edition (Урезанная)</code>\n\n")
         f"📊 Мониторинг: {mon_status}\n\n"
         f"💰 <b>За 24 часа</b>\n"
         f"Оплат: {m['pay_count_24h']}\n"
@@ -2020,6 +2020,9 @@ def build_admin_dashboard_text(mon_status: str = "✅ Активен (3x-ui + Pr
     )
 
 def admin_dashboard_keyboard():
+    is_pro = staff_roles.is_pro_edition(get_setting)
+    badge = "💎" if is_pro else "🔒 [FREE]"
+    tier_switch_label = "🟢 Режим бота: PRO (Переключить на FREE)" if is_pro else "🔒 Режим бота: FREE (Включить PRO)"
     buttons = [
         [
             InlineKeyboardButton("🖥 Сервера", callback_data="admin_servers_menu"),
@@ -2027,20 +2030,20 @@ def admin_dashboard_keyboard():
         ],
         [
             InlineKeyboardButton("👥 Пользователи", callback_data="admin_users_menu"),
-            InlineKeyboardButton("📣 Маркетинг", callback_data="admin_marketing_menu")
+            InlineKeyboardButton(f"📣 Маркетинг {badge}", callback_data="admin_marketing_menu")
         ],
         [
             InlineKeyboardButton("⚙️ Настройки бота", callback_data="admin_settings_menu"),
-            InlineKeyboardButton("🧩 Расширения", callback_data="admin_ext_menu")
+            InlineKeyboardButton(f"🧩 Расширения {badge}", callback_data="admin_ext_menu")
         ],
         [
-            InlineKeyboardButton(
-                "👥 Персонал (2 Адм / 3 Мод) " + ("💎" if staff_roles.is_pro_edition(get_setting) else "🔒 [FREE]"),
-                callback_data="admin_staff_menu"
-            )
+            InlineKeyboardButton(f"👥 Персонал (2 Адм / 3 Мод) {badge}", callback_data="admin_staff_menu")
         ],
         [
-            InlineKeyboardButton("🔔 Настройки уведомлений (Что присылать)", callback_data="admin_notif_menu")
+            InlineKeyboardButton(f"🔔 Настройки уведомлений {badge}", callback_data="admin_notif_menu")
+        ],
+        [
+            InlineKeyboardButton(tier_switch_label, callback_data="admin_staff_toggle_tier")
         ],
         [
             InlineKeyboardButton("🈴 На главную", callback_data="admin_back_main")
@@ -2840,6 +2843,18 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if await staff_roles.handle_staff_callback(query, context, DB_PATH, ADMIN_ID, get_setting, set_setting):
         return
+
+    # Блокировка PRO-разделов во FREE-версии
+    pro_locked_map = {
+        "admin_marketing_menu": "📣 Маркетинг и Промокоды",
+        "admin_ext_menu": "🧩 PRO-Расширения",
+        "admin_notif_menu": "🔔 Настройки уведомлений"
+    }
+    if data in pro_locked_map and not staff_roles.is_pro_edition(get_setting):
+        l_text, l_kb = staff_roles.render_pro_locked_screen(pro_locked_map[data])
+        await staff_roles.safe_edit(query, l_text, l_kb)
+        return
+
 
     allowed, deny_reason = staff_roles.check_staff_permission(DB_PATH, user.id, ADMIN_ID, data, get_setting)
     if not allowed:

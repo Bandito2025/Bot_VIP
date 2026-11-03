@@ -1,3 +1,9 @@
+
+import logging as _sec_logging
+_sec_logging.getLogger('httpx').setLevel(_sec_logging.WARNING)
+_sec_logging.getLogger('httpcore').setLevel(_sec_logging.WARNING)
+import server_wizard
+import tariff_wizard
 import staff_roles
 from payment_cards import handle_payment_admin_callback, handle_payment_admin_text, render_gateway_card
 import autopay
@@ -2445,6 +2451,18 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user
     data = query.data
+    if data == 'admin_tariffs':
+        data = 'admin_tariffs_list'
+        query.data = 'admin_tariffs_list'
+    if data in ('admin_srv_add', 'admin_tariff_add', 'new_tariff', 'admin_tariff_groups', 'admin_mkt_promo_add', 'tariff_add', 'add_tariff', 'admin_add_tariff', 'admin_mkt_coupon_add'):
+        await tariff_wizard.start_tariff_wizard(update, context)
+        return
+    if data and data.startswith('tariff_wiz_'):
+        if await tariff_wizard.handle_tariff_callback(update, context):
+            return
+    if data in ('my_keys', 'user_keys', 'show_keys', 'keys_list', 'btn_my_keys'):
+        await server_wizard.render_my_keys(update, context, globals().get('staff_roles'))
+        return
     await query.answer()
 
     # ==========================================================================
@@ -4005,6 +4023,8 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Обработка текстовых сообщений ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await tariff_wizard.handle_tariff_text_input(update, context):
+        return
     if await handle_payment_admin_text(update.message, update.effective_user, context, set_setting, get_setting, ADMIN_ID):
         return
     user = update.effective_user
@@ -4620,6 +4640,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_cmd(update, context)
 
     else:
+        if await tariff_wizard.handle_tariff_text_input(update, context):
+            return
         await msg.reply_text("Выберите нужный раздел в меню ниже:", reply_markup=main_keyboard(user.id))
 
 

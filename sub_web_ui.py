@@ -1,4 +1,4 @@
-﻿import html
+import html
 import base64
 from urllib.parse import quote
 

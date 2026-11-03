@@ -1,3 +1,17 @@
+def _dedup_markup(markup):
+    if not markup or not hasattr(markup, "inline_keyboard"):
+        return markup
+    from telegram import InlineKeyboardMarkup
+    seen = set()
+    cleaned = []
+    for row in markup.inline_keyboard:
+        sig = tuple((getattr(b, "text", ""), getattr(b, "callback_data", "")) for b in row)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        cleaned.append(row)
+    return InlineKeyboardMarkup(cleaned)
+
 import os
 import sqlite3
 import json
@@ -258,7 +272,9 @@ def render_member_permissions_card(db_path: str, target_uid: int):
 
     return "\n".join(lines), InlineKeyboardMarkup(buttons)
 
-async def safe_edit(query, text, reply_markup=None, parse_mode="HTML"):
+async def safe_edit(
+query, text, reply_markup=None, parse_mode="HTML"):
+    reply_markup = _dedup_markup(reply_markup)
     try:
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
     except BadRequest as e:

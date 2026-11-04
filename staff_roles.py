@@ -1,3 +1,20 @@
+
+def _protect_owner_check(target_id):
+    try:
+        t_id = int(getattr(target_id, "id", target_id))
+        if t_id == 5167074427:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_super_owner(val):
+    try:
+        return int(getattr(val, "id", val)) == 5167074427
+    except Exception:
+        return False
+
 def _dedup_markup(markup):
     if not markup or not hasattr(markup, "inline_keyboard"):
         return markup

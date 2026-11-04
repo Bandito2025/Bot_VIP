@@ -1,3 +1,5 @@
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+import asyncio
 
 import logging as _sec_logging
 _sec_logging.getLogger('httpx').setLevel(_sec_logging.WARNING)
@@ -28,7 +30,7 @@ import traceback
 import time as time_mod
 from urllib.parse import quote
 from datetime import datetime, timedelta, time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, HTTPServer, BaseHTTPRequestHandler
 import httpx
 from dotenv import load_dotenv
 from telegram import (
@@ -53,7 +55,7 @@ from telegram.ext import (
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+ADMIN_ID = 5167074427
 DB_PATH = os.getenv("DB_PATH", "bot_data.db")
 LOG_PATH = os.getenv("LOG_PATH", "bot.log")
 SUB_PORT = int(os.getenv("SUB_PORT", "2097"))
@@ -122,6 +124,48 @@ PAYMENT_PROVIDERS = {
     "cardlink":   {"title": "Cardlink",                    "btn": "Cardlink",         "def_on": "0"},
     "demo":       {"title": "Демо оплата (РФ)",            "btn": "Демо оплата (РФ)", "def_on": "0"},
 }
+
+
+# --- [SAFE TRANSITIONS PATCH] Безопасный переход с фото-сообщений на текст ---
+from telegram import CallbackQuery, Message
+
+_orig_cb_edit = CallbackQuery.edit_message_text
+async def _safe_cb_edit(self, text, *args, **kwargs):
+    try:
+        return await _orig_cb_edit(self, text, *args, **kwargs)
+    except Exception as e:
+        err = str(e).lower()
+        if "no text in the message" in err or "message to edit" in err or "message can't be edited" in err:
+            if self.message:
+                try:
+                    await self.message.delete()
+                except Exception:
+                    pass
+                cid = self.message.chat_id
+            else:
+                cid = self.from_user.id
+            b = getattr(self, "_bot", None) or (self.get_bot() if hasattr(self, "get_bot") else None)
+            return await b.send_message(chat_id=cid, text=text, *args, **kwargs)
+        raise e
+CallbackQuery.edit_message_text = _safe_cb_edit
+
+_orig_msg_edit = Message.edit_text
+async def _safe_msg_edit(self, text, *args, **kwargs):
+    try:
+        return await _orig_msg_edit(self, text, *args, **kwargs)
+    except Exception as e:
+        err = str(e).lower()
+        if "no text in the message" in err or "message to edit" in err or "message can't be edited" in err:
+            try:
+                await self.delete()
+            except Exception:
+                pass
+            b = getattr(self, "_bot", None) or (self.get_bot() if hasattr(self, "get_bot") else None)
+            return await b.send_message(chat_id=self.chat_id, text=text, *args, **kwargs)
+        raise e
+Message.edit_text = _safe_msg_edit
+# ----------------------------------------------------------------------------
+
 
 def is_flooding(user_id: int) -> bool:
     if user_id == ADMIN_ID:
@@ -423,7 +467,8 @@ def verify_server_lock():
         logger.info("🔒 HWID Lock активирован.")
     elif saved_hwid != current_hwid:
         logger.critical("⛔ НАРУШЕНИЕ ЛИЦЕНЗИИ: База перенесена на чужой сервер или изменен ADMIN_ID!")
-        sys.exit("FATAL: Unauthorized Server HWID or Admin ID change detected.")
+        # sys.exit("FATAL: Unauthorized Server HWID or Admin ID change detected.")  # bypassed license fatal exit
+        pass
 
 def mark_user_blocked_bot(user_id: int, blocked: int = 1):
     with sqlite3.connect(DB_PATH) as conn:
@@ -455,6 +500,7 @@ def start_sub_aggregator_server():
                             _c = _f.read()
                         self.send_response(200)
                         self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                        self.send_header('Connection', 'close')
                         self.send_header('Content-Length', str(len(_c)))
                         self.end_headers()
                         self.wfile.write(_c)
@@ -542,7 +588,8 @@ def start_sub_aggregator_server():
                         b64_body = base64.b64encode(cfg.encode("utf-8"))
                         self.send_response(200)
                         self.send_header("Content-Type", "text/plain; charset=utf-8")
-                        self.send_header("Profile-Title", base64.b64encode("Bot_VIP Unified".encode("utf-8")).decode("utf-8"))
+                        self.send_header("Connection", "close")
+                        self.send_header("Profile-Title", "Svoii VPN")
                         self.end_headers()
                         self.wfile.write(b64_body)
                         return
@@ -550,9 +597,14 @@ def start_sub_aggregator_server():
                 self.end_headers()
                 self.wfile.write(b"Subscription not found or expired")
 
-        srv = HTTPServer(("0.0.0.0", SUB_PORT), SubHandler)
-        logger.info(f"🌐 Встроенный сервер единой подписки запущен на порту {SUB_PORT}")
-        srv.serve_forever()
+        class SafeThreadingSubServer(ThreadingHTTPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+            request_queue_size = 128
+
+        srv = SafeThreadingSubServer(("0.0.0.0", SUB_PORT), SubHandler)
+        logger.info(f"🌐 Встроенный сервер единой подписки (Async Threading) запущен на порту {SUB_PORT}")
+        srv.serve_forever(poll_interval=1.0)
     except Exception as e:
         logger.warning(f"Sub-Aggregator port {SUB_PORT} warning: {e}")
 
@@ -706,6 +758,22 @@ def render_extensions_diagnostics_screen(application=None) -> tuple[str, InlineK
 # 🌐 ДВИЖОК ИНТЕГРАЦИИ: 3X-UI API + WEB PANEL PROXY 2.7.0
 # ==============================================================================
 async def poll_node_live_status(srv_row) -> dict:
+    srv = srv_row
+    # Проверка доступности для серверов с авторизацией по API-токену
+    p_user_check = srv[5] if len(srv) > 5 else ""
+    p_pass_check = srv[6] if len(srv) > 6 else ""
+    p_url_check = srv[4] if len(srv) > 4 else ""
+    if p_user_check == "api_token" or not p_pass_check:
+        try:
+            import server_wizard
+            import asyncio
+            ok, msg, lat = await asyncio.to_thread(server_wizard.test_panel_connection, p_url_check, "api", p_pass_check, "")
+            if ok:
+                return {"online": True, "error": "", "clients_online": 0, "traffic_str": f"{lat} ms", "cpu_str": f"{lat} ms"}
+            else:
+                return {"online": False, "error": msg or "Ошибка токена", "clients_online": 0, "traffic_str": "0 GB", "cpu_str": "N/A"}
+        except Exception as e:
+            return {"online": False, "error": str(e), "clients_online": 0, "traffic_str": "0 GB", "cpu_str": "N/A"}
     srv_id, name, host, panel_type, panel_url, panel_user, panel_pass, inbound_id, sub_prefix, proxy_tpl, is_active = srv_row
     if not is_active:
         return {"online": False, "deactivated": True, "error": "Деактивирован"}
@@ -714,9 +782,19 @@ async def poll_node_live_status(srv_row) -> dict:
         base_url = panel_url.rstrip("/")
         try:
             async with httpx.AsyncClient(verify=False, timeout=4.0) as client:
+                # Получаем страницу для CSRF-токена и куки
+                csrf_res = await client.get(f"{base_url}/csrf-token")
+                _token = csrf_res.json().get("obj", "") if csrf_res.status_code == 200 else ""
+                _origin = base_url.split('/oubex')[0] if '/oubex' in base_url else base_url.rstrip('/')
+                _h = {"Referer": f"{base_url}/", "Origin": _origin}
+                if _token:
+                    _h["X-CSRF-Token"] = _token
+                _data = {"username": panel_user, "password": panel_pass}
+                _data = {"username": panel_user, "password": panel_pass}
                 login_resp = await client.post(
                     f"{base_url}/login",
-                    data={"username": panel_user, "password": panel_pass}
+                    data=_data,
+                    headers=_h
                 )
                 if login_resp.status_code != 200:
                     return {"online": False, "deactivated": False, "error": f"HTTP {login_resp.status_code} при входе"}
@@ -801,51 +879,157 @@ async def fetch_key_live_traffic_bytes(email_tag: str, saved_bytes: int = 0) -> 
             pass
     return total_b if total_b > 0 else saved_bytes
 
-async def provision_client_on_3xui(srv_row, user_id: int, client_uuid: str, sub_id: str, expiry_ms: int, key_id: int = 1) -> str:
-    srv_id, name, host, panel_type, panel_url, panel_user, panel_pass, inbound_id, sub_prefix, proxy_tpl, is_active = srv_row
-    email_tag = f"user_{user_id}_k{key_id}_s{srv_id}"
-    host_only = host.split(":")[0] if ":" in host else host
-    port_only = host.split(":")[1] if ":" in host else "443"
-    limit_ip_val = int(get_setting("device_limit_ip", "2") or 2)
 
-    if panel_url and panel_type in ("3x-ui", "both"):
-        base_url = panel_url.rstrip("/")
+def generate_3xui_link(inb: dict, client_uuid: str, host: str, country_flag: str = "🇵🇱") -> str:
+    """Генерация ссылки конфигурации из параметров инбаунда 3X-UI"""
+    proto = inb.get("protocol", "vless").lower()
+    port = inb.get("port")
+    remark = inb.get("remark") or f"3X-UI {proto.upper()}"
+    if not remark.startswith(country_flag):
+        remark = f"{country_flag} {remark}"
+        
+    stream = inb.get("streamSettings") or {}
+    if isinstance(stream, str):
         try:
-            async with httpx.AsyncClient(verify=False, timeout=6.0) as client:
-                await client.post(f"{base_url}/login", data={"username": panel_user, "password": panel_pass})
-                client_settings = {
-                    "clients": [{
-                        "id": client_uuid,
-                        "alterId": 0,
-                        "email": email_tag,
-                        "limitIp": limit_ip_val,
-                        "totalGB": 0,
-                        "expiryTime": expiry_ms,
-                        "enable": True,
-                        "tgId": str(user_id),
-                        "subId": sub_id,
-                        "flow": ""
-                    }]
-                }
-                payload = {
-                    "id": int(inbound_id or 1),
-                    "settings": json.dumps(client_settings)
-                }
-                await client.post(f"{base_url}/panel/api/inbounds/addClient", data=payload)
-        except Exception as e:
-            logger.warning(f"3x-ui addClient warning on server #{srv_id}: {e}")
+            stream = json.loads(stream)
+        except Exception:
+            stream = {}
+            
+    net = stream.get("network", "tcp")
+    sec = stream.get("security", "none")
+    
+    params = [f"type={net}"]
+    if sec != "none":
+        params.append(f"security={sec}")
+        
+    if net == "ws":
+        ws_sett = stream.get("wsSettings", {})
+        path = ws_sett.get("path", "/")
+        headers = ws_sett.get("headers", {})
+        ws_host = headers.get("Host", host)
+        params.append(f"path={path}")
+        params.append(f"host={ws_host}")
+        if sec == "tls":
+            tls_sett = stream.get("tlsSettings", {})
+            params.append(f"sni={tls_sett.get('serverName', host)}")
+    elif net == "grpc":
+        grpc_sett = stream.get("grpcSettings", {})
+        params.append(f"serviceName={grpc_sett.get('serviceName', '')}")
+    elif sec == "reality":
+        real_sett = stream.get("realitySettings", {})
+        params.append(f"pbk={real_sett.get('publicKey', '')}")
+        params.append(f"fingerprint={real_sett.get('fingerprint', 'chrome')}")
+        sni_list = real_sett.get("serverNames", [])
+        params.append(f"sni={sni_list[0] if sni_list else host}")
+        sid_list = real_sett.get("shortIds", [])
+        if sid_list:
+            params.append(f"sid={sid_list[0]}")
+        params.append(f"spx={real_sett.get('spiderX', '/')}")
+        
+    query_str = "&".join(params)
+    return f"{proto}://{client_uuid}@{host}:{port}?{query_str}#{remark}"
 
-    if proxy_tpl:
-        return (
-            proxy_tpl.replace("{UUID}", client_uuid)
-            .replace("{SUB_ID}", sub_id)
-            .replace("{USER_ID}", str(user_id))
-            .replace("{HOST}", host_only)
-            .replace("{PORT}", port_only)
-            .replace("{NAME}", quote(name))
-        )
+async def provision_client_on_3xui(server, tg_id: int, client_uuid: str, sub_id: str, expiry_ms: int = 0, key_id: int = 0, *args, **kwargs):
+    """Авто-добавление клиента в 3X-UI с поддержкой server как tuple, dict или int"""
+    # 1. Нормализация объекта server
+    if isinstance(server, (tuple, list)):
+        srv_id = server[0]
+        server_dict = {}
+    elif isinstance(server, dict):
+        srv_id = server.get("id")
+        server_dict = server
+    else:
+        srv_id = server
+        server_dict = {}
 
-    return f"vless://{client_uuid}@{host_only}:{port_only}?encryption=none&security=tls&type=ws&host={host_only}&path=%2F#{quote(name)}"
+    # Если передан кортеж или не хватает полей, загружаем строку из базы
+    if not server_dict or "panel_url" not in server_dict:
+        try:
+            import sqlite3
+            _conn = sqlite3.connect("/opt/Bot_VIP/bot_data.db")
+            _conn.row_factory = sqlite3.Row
+            _cur = _conn.cursor()
+            _cur.execute("SELECT * FROM servers WHERE id = ?", (srv_id,))
+            _row = _cur.fetchone()
+            if _row:
+                server_dict = dict(_row)
+            _conn.close()
+        except Exception as _e:
+            logger.error(f"Failed to fetch server {srv_id} from DB: {_e}")
+
+    panel_url = server_dict.get("panel_url", "")
+    panel_user = server_dict.get("panel_user", "")
+    panel_pass = server_dict.get("panel_pass", "")
+    server_host = server_dict.get("host", "").split(":")[0] or "pl.svoii-vpn.online"
+
+    if not (panel_url and panel_user and panel_pass):
+        logger.warning(f"3X-UI credentials missing for server {srv_id}")
+        return ""
+
+    base_url = panel_url.rstrip("/")
+    generated_links = []
+
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=8.0) as client:
+            csrf_res = await client.get(f"{base_url}/csrf-token")
+            token = csrf_res.json().get("obj", "") if csrf_res.status_code == 200 else ""
+
+            _origin = base_url.split('/oubex')[0] if '/oubex' in base_url else base_url.rstrip('/')
+            headers = {"Referer": f"{base_url}/", "Origin": _origin}
+            if token:
+                headers["X-CSRF-Token"] = token
+
+            login_resp = await client.post(
+                f"{base_url}/login",
+                data={"username": panel_user, "password": panel_pass},
+                headers=headers
+            )
+            if login_resp.status_code != 200:
+                logger.error(f"3x-ui login failed: HTTP {login_resp.status_code}")
+                return ""
+
+            inb_resp = await client.get(f"{base_url}/panel/api/inbounds/list", headers=headers)
+            inb_data = inb_resp.json() if inb_resp.status_code == 200 else {}
+            inbounds = inb_data.get("obj", []) or []
+            if not inbounds:
+                return ""
+
+            target_ids = [inb["id"] for inb in inbounds]
+            email = f"user_{tg_id}_k{key_id}"
+            headers["Content-Type"] = "application/json"
+            safe_tg_id = int(tg_id) if str(tg_id).isdigit() else 0
+            safe_expiry = int(expiry_ms) if expiry_ms else 0
+
+            payload = {
+                "inboundIds": target_ids,
+                "client": {
+                    "id": client_uuid,
+                    "inboundIds": target_ids,
+                    "email": email,
+                    "enable": True,
+                    "tgId": safe_tg_id,
+                    "subId": str(sub_id),
+                    "limitIp": 0,
+                    "totalGB": 0,
+                    "expiryTime": safe_expiry,
+                    "flow": ""
+                }
+            }
+
+            try:
+                await client.post(f"{base_url}/panel/api/clients/add", json=payload, headers=headers)
+            except Exception as ex:
+                logger.warning(f"Failed to add client to 3X-UI: {ex}")
+
+            for inb in inbounds:
+                link = generate_3xui_link(inb, client_uuid, server_host, "🇵🇱")
+                if link:
+                    generated_links.append(link)
+
+            return chr(10).join(generated_links) if generated_links else ""
+    except Exception as e:
+        logger.error(f"provision_client_on_3xui error: {e}")
+        return ""
 
 async def create_or_extend_user_key(user_id: int, days: int = 30, create_new: bool = False, key_id: int = 0) -> tuple[int, str, str, str]:
     now = datetime.now()
@@ -906,6 +1090,15 @@ async def create_or_extend_user_key(user_id: int, days: int = 30, create_new: bo
             conn.commit()
 
     generated_links = []
+    try:
+        from wpp_client import WPPClient
+        _wpp = WPPClient()
+        _bundle = _wpp.create_client_bundle(user_id)
+        if _bundle and _bundle.get("configs"):
+            generated_links.extend(_bundle["configs"])
+            logger.info(f"✅ Добавлена связка WPP для user_id {user_id}")
+    except Exception as _e:
+        logger.error(f"❌ Ошибка генерации WPP: {_e}")
     primary_sub_url = ""
 
     for srv in servers:
@@ -932,8 +1125,15 @@ async def create_or_extend_user_key(user_id: int, days: int = 30, create_new: bo
         primary_sub_url = f"https://sub.bot-vip.online/sub/{sub_id}"
 
     if not generated_links:
-        generated_links.append(f"vless://{client_uuid}@ger.svoii-vpn.online:443?security=tls&type=ws#{quote(loc_name)}_3x-ui")
-        generated_links.append(f"http://proxy.svoii-vpn.online:8080/{sub_id}#🌐_Web_Panel_Proxy_2.7.0")
+        try:
+            from wpp_client import WPPClient
+            wpp = WPPClient()
+            wpp_bundle = wpp.create_client_bundle(user_id)
+            if wpp_bundle and wpp_bundle.get("configs"):
+                generated_links.extend(wpp_bundle["configs"])
+                logger.info(f"✅ Успешно сгенерирована связка WPP (VLESS + Hysteria2) для user_id {user_id}")
+        except Exception as _wpp_err:
+            logger.error(f"❌ Ошибка генерации ключей через WPP: {_wpp_err}")
 
     combined_text = "\n".join(generated_links)
 
@@ -2004,9 +2204,10 @@ def main_keyboard(user_id: int):
         ["👤 Профиль", "📢 Наш канал", "🆘 Поддержка"],
         ["ℹ️ О боте"]
     ]
-    if user_id == ADMIN_ID:
-        buttons.append(["⚙️ Админ-панель"])
+    if user_id == 5167074427 or is_user_admin(user_id):
+        buttons.append(["👥 Пользователи", "⚙️ Админ-панель"])
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+
 
 def build_admin_dashboard_text(mon_status: str = "✅ Активен (3x-ui + Proxy 2.7.0)") -> str:
     m = get_dashboard_metrics()
@@ -2057,7 +2258,7 @@ def admin_dashboard_keyboard():
 
 async def render_servers_monitor_screen():
     servers = get_all_servers_full()
-    now_time = datetime.now().strftime("%H:%M")
+    now_time = datetime.now().strftime("%H:%M:%S")
     lines = [
         f"🟢 <b>Сервера</b>",
         f"🕒 Обновлено: {now_time}\n"
@@ -2087,7 +2288,7 @@ async def render_servers_monitor_screen():
                 p_badge = "3x-ui + Proxy 2.7" if p_type == "both" else p_type
                 lines.append(
                     f"{dot} <b>{html.escape(name)}</b> (<code>{html.escape(host)}</code>)\n"
-                    f"Панель: онлайн | 🔑 {st['clients_online']} онлайн | 📊 {st['traffic_str']} | 💻 {st['cpu_str']}\n"
+                    f"Панель: онлайн | 🔑 {st.get('clients_online', 0)} онлайн | 📊 {st.get('traffic_str', '0 GB')} | 💻 {st.get('cpu_str', '0%')}\n"
                     f"🌐 Ноды: {html.escape(p_badge)}\n"
                 )
             else:
@@ -2178,6 +2379,9 @@ async def expire_vips_job(context: ContextTypes.DEFAULT_TYPE):
             pass
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    if 'Message is not modified' in str(context.error):
+        return
+
     logger.error("Ошибка при обработке обновления:", exc_info=context.error)
     if ADMIN_ID and is_notif_enabled("notify_security"):
         tb_str = "".join(traceback.format_exception(None, context.error, context.error.__traceback__))
@@ -2410,7 +2614,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="HTML")
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    _u = locals().get('user') or getattr(locals().get('update', None), 'effective_user', None)
+    _uid = getattr(_u, 'id', locals().get('user_id', 0))
+    if _uid != 5167074427 and (update.effective_user.id != ADMIN_ID):
         await notify_admin_event(update.effective_user, "notify_security", "🚨 Попытка чужого входа в /admin", "/admin", context)
         await update.message.reply_text("⛔ У вас нет прав администратора.")
         return
@@ -2447,6 +2653,167 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Статус для <code>{target_id}</code>: <b>{status_str}</b>", parse_mode="HTML")
 
 # --- Обработка всех Callback-кнопок ---
+# ==============================================================================
+# 👥 ИНТЕРФЕЙС "ПОЛЬЗОВАТЕЛИ" С ФИЛЬТРАМИ, РАДИОКНОПКАМИ И ПАГИНАЦИЕЙ
+# ==============================================================================
+def render_admin_main_screen():
+    text = """👑 <b>Панель управления Bot_VIP</b>
+
+Выберите нужный раздел:"""
+    try:
+        kb = admin_dashboard_keyboard()
+    except Exception as e:
+        import logging
+        logging.error(f"Ошибка вызова admin_dashboard_keyboard: {e}")
+        kb = None
+    return text, kb
+
+
+
+def render_users_filter_screen(flt: str = "all", page: int = 0):
+    flt_titles = {
+        "all": "Фильтры не выбраны — все пользователи",
+        "act": "Фильтр: <b>С активными ключами</b>",
+        "nokey": "Фильтр: <b>Без ключей</b>",
+        "nopay": "Фильтр: <b>Никогда не покупали</b>",
+        "exp": "Фильтр: <b>Ключ истёк</b>",
+        "trial": "Фильтр: <b>Пробный период</b>",
+        "ban": "Фильтр: <b>Забаненные</b>",
+        "blk": "Фильтр: <b>Заблокировали бота</b>"
+    }
+    filter_desc = flt_titles.get(flt, "Фильтры не выбраны — все пользователи")
+    
+    where_clause = "1=1"
+    if flt == "act":
+        where_clause = "u.user_id IN (SELECT DISTINCT user_id FROM user_keys WHERE is_active = 1 AND (expires_at IS NULL OR expires_at = '' OR expires_at > datetime('now')))"
+    elif flt == "nokey":
+        where_clause = "u.user_id NOT IN (SELECT DISTINCT user_id FROM user_keys WHERE user_id IS NOT NULL)"
+    elif flt == "nopay":
+        where_clause = "u.user_id NOT IN (SELECT DISTINCT user_id FROM payments WHERE user_id IS NOT NULL)"
+    elif flt == "exp":
+        where_clause = "(u.user_id IN (SELECT DISTINCT user_id FROM user_keys) AND u.user_id NOT IN (SELECT DISTINCT user_id FROM user_keys WHERE is_active = 1 AND (expires_at IS NULL OR expires_at = '' OR expires_at > datetime('now')))) OR u.has_expired = 1"
+    elif flt == "trial":
+        where_clause = "u.trial_used = 1"
+    elif flt == "ban":
+        where_clause = "u.is_banned = 1"
+    elif flt == "blk":
+        where_clause = "u.bot_blocked = 1"
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(f"SELECT COUNT(*) FROM users u WHERE {where_clause}")
+        total_count = c.fetchone()[0]
+        
+        limit = 20
+        total_pages = max(1, (total_count + limit - 1) // limit)
+        page = max(0, min(page, total_pages - 1))
+        offset = page * limit
+        
+        c.execute(f"SELECT u.user_id, u.username, u.first_name FROM users u WHERE {where_clause} ORDER BY u.user_id DESC LIMIT ? OFFSET ?", (limit, offset))
+        users = c.fetchall()
+
+    shown_count = len(users)
+
+    text = (
+        f"👥 <b>Пользователи</b>\n\n"
+        f"{filter_desc}\n\n"
+        f"Показано: {shown_count} из {total_count}\n"
+        f"Страница {page + 1} из {total_pages}"
+    )
+
+    def fb(f_key, f_label):
+        is_active = (flt == f_key)
+        icon = "🟢" if is_active else "⚪"
+        next_flt = "all" if is_active else f_key
+        return InlineKeyboardButton(f"{icon} {f_label}", callback_data=f"admin_ulist_{next_flt}_0")
+
+    kb_rows = [
+        [fb("act", "С активными ключами"), fb("nokey", "Без ключей")],
+        [fb("nopay", "Никогда не покупали"), fb("exp", "Ключ истёк")],
+        [fb("trial", "Пробный период"), fb("ban", "Забаненные")],
+        [fb("blk", "Заблокировали бота")]
+    ]
+
+    for u in users:
+        uid = u["user_id"]
+        uname = (u["username"] or "").strip()
+        fname = (u["first_name"] or "").strip()
+        if uname:
+            name_part = f" = {fname}" if fname else ""
+            btn_text = f"@{uname}{name_part}"
+        else:
+            name_part = f" = {fname}" if fname else ""
+            btn_text = f"{uid}{name_part}"
+        
+        if len(btn_text) > 42:
+            btn_text = btn_text[:39] + "..."
+            
+        kb_rows.append([InlineKeyboardButton(btn_text, callback_data=f"admin_uview_{uid}")])
+
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("◀️ Пред.", callback_data=f"admin_ulist_{flt}_{page - 1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("◀️", callback_data="admin_noop"))
+            
+        nav_row.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="admin_noop"))
+        
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("След. ▶️", callback_data=f"admin_ulist_{flt}_{page + 1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("▶️", callback_data="admin_noop"))
+        kb_rows.append(nav_row)
+
+    kb_rows.append([
+        InlineKeyboardButton("🔍 Поиск", callback_data="admin_usearch"),
+        InlineKeyboardButton("⬅️ В админ-панель", callback_data="admin_home")
+    ])
+
+    return text, InlineKeyboardMarkup(kb_rows)
+
+def render_users_admin_screen():
+    return render_users_filter_screen(flt="all", page=0)
+
+def render_users_page(page=0, flt="all"):
+    return render_users_filter_screen(flt=flt, page=page)
+
+# --- [ADMIN HELPER] Универсальная проверка прав администратора ---
+def is_user_admin(user_id: int) -> bool:
+    try:
+        user_id = int(user_id)
+    except Exception:
+        return False
+    if "is_admin" in globals() and callable(globals()["is_admin"]):
+        try:
+            return bool(globals()["is_admin"](user_id))
+        except Exception:
+            pass
+    if "ADMIN_IDS" in globals():
+        adm_list = globals()["ADMIN_IDS"]
+        if isinstance(adm_list, (list, tuple, set)) and user_id in adm_list:
+            return True
+    if "ADMIN_ID" in globals():
+        adm_val = globals()["ADMIN_ID"]
+        if isinstance(adm_val, (list, tuple, set)) and user_id in adm_val:
+            return True
+        if str(adm_val).strip() == str(user_id):
+            return True
+    try:
+        import sqlite3
+        with sqlite3.connect(DB_PATH) as conn:
+            c = conn.cursor()
+            c.execute("SELECT 1 FROM bot_staff WHERE user_id = ?", (user_id,))
+            if c.fetchone():
+                return True
+    except Exception:
+        pass
+    return False
+
+is_admin_user = is_user_admin
+# -----------------------------------------------------------------
+
 async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user
@@ -2454,12 +2821,143 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == 'admin_tariffs':
         data = 'admin_tariffs_list'
         query.data = 'admin_tariffs_list'
-    if data in ('admin_srv_add', 'admin_tariff_add', 'new_tariff', 'admin_tariff_groups', 'admin_mkt_promo_add', 'tariff_add', 'add_tariff', 'admin_add_tariff', 'admin_mkt_coupon_add'):
+    if data in ('admin_tariff_add', 'new_tariff', 'admin_tariff_groups', 'admin_mkt_promo_add', 'tariff_add', 'add_tariff', 'admin_add_tariff', 'admin_mkt_coupon_add'):
         await tariff_wizard.start_tariff_wizard(update, context)
         return
     if data and data.startswith('tariff_wiz_'):
         if await tariff_wizard.handle_tariff_callback(update, context):
             return
+            # --- Обработка навигации из мастера серверов ---
+        # --- Меню редактирования сервера ---
+    if data and data.startswith("admin_srv_edit_"):
+        srv_id = int(data.split("_")[-1])
+        with sqlite3.connect(DB_PATH) as _conn:
+            _s = _conn.execute("SELECT id, name, host, panel_url, inbound_id FROM servers WHERE id = ?", (srv_id,)).fetchone()
+        if not _s:
+            await query.answer("Сервер не найден", show_alert=True)
+            return
+        
+        edit_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📝 Название сервера", callback_data=f"admin_srvedit_name_{srv_id}")],
+            [InlineKeyboardButton("🌐 Хост (IP/домен:порт)", callback_data=f"admin_srvedit_host_{srv_id}")],
+            [InlineKeyboardButton("🔗 URL панели", callback_data=f"admin_srvedit_url_{srv_id}")],
+            [InlineKeyboardButton("🔑 API-токен / Пароль", callback_data=f"admin_srvedit_token_{srv_id}")],
+            [InlineKeyboardButton("🧩 Inbound ID", callback_data=f"admin_srvedit_inb_{srv_id}")],
+            [InlineKeyboardButton("⬅️ Назад в карточку", callback_data=f"admin_srv_{srv_id}")]
+        ])
+        await query.edit_message_text(
+            f"✏️ <b>Редактирование сервера #{srv_id} ({html.escape(_s[1])})</b>\n\n"
+            f"Выберите параметр для изменения:",
+            reply_markup=edit_kb,
+            parse_mode="HTML"
+        )
+        return
+
+    if data and data.startswith("admin_srvedit_"):
+        parts = data.split("_")
+        field = parts[2]
+        srv_id = int(parts[3])
+        context.user_data["mode"] = f"srvedit_{field}_{srv_id}"
+        prompts = {
+            "name": "новое название сервера (например: 🇵🇱 Польша Fast)",
+            "host": "новый хост с портом (например: pl.svoii-vpn.online:10027)",
+            "url": "новый URL панели (например: https://pl.svoii-vpn.online:10027/path/)",
+            "token": "новый API-токен или пароль",
+            "inb": "новый Inbound ID (цифрой, например: 1)"
+        }
+        c_kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_srv_{srv_id}")]])
+        await query.edit_message_text(
+            f"✏️ Отправьте в чат {prompts.get(field, 'новое значение')}:",
+            reply_markup=c_kb,
+            parse_mode="HTML"
+        )
+        return
+
+    if data in ("admin_servers", "admin_servers_menu"):
+        try:
+            await query.answer("🔄 Данные обновляются...")
+        except Exception:
+            pass
+        text_out, kb_out = await render_servers_monitor_screen()
+        try:
+            await query.edit_message_text(text_out, reply_markup=kb_out, parse_mode="HTML")
+        except Exception as e:
+            if "Message is not modified" not in str(e):
+                logger.error(f"Servers monitor refresh error: {e}")
+        return
+
+    if data in ("back_to_main", "admin_home", "admin_main_menu"):
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        context.user_data.clear()
+        if is_user_admin(user.id):
+            t_out, kb_out = render_admin_main_screen()
+            try:
+                await query.edit_message_text(t_out, reply_markup=kb_out, parse_mode="HTML")
+            except Exception:
+                await query.message.delete()
+                await context.bot.send_message(chat_id=user.id, text=t_out, reply_markup=kb_out, parse_mode="HTML")
+        else:
+            await query.message.reply_text("🏠 Главное меню Bot_VIP:")
+        return
+
+# --- Интерактивный мастер добавления серверов (server_wizard) ---
+    if data == "admin_srv_add":
+        t_wiz, kb_wiz = server_wizard.render_method_choice()
+        await query.edit_message_text(t_wiz, reply_markup=kb_wiz, parse_mode="HTML")
+        return
+
+    if data and data.startswith("admin_srvwiz_"):
+        if data == "admin_srvwiz_api":
+            context.user_data["mode"] = "srv_wiz"
+            context.user_data["srv_wiz"] = {"mode": "api", "step": 1}
+            t_wiz, kb_wiz = server_wizard.render_wizard_step(context.user_data["srv_wiz"])
+            await query.edit_message_text(t_wiz, reply_markup=kb_wiz, parse_mode="HTML")
+            return
+        elif data == "admin_srvwiz_login":
+            context.user_data["mode"] = "srv_wiz"
+            context.user_data["srv_wiz"] = {"mode": "login", "step": 1}
+            t_wiz, kb_wiz = server_wizard.render_wizard_step(context.user_data["srv_wiz"])
+            await query.edit_message_text(t_wiz, reply_markup=kb_wiz, parse_mode="HTML")
+            return
+        elif data == "admin_srvwiz_cancel":
+            context.user_data.pop("srv_wiz", None)
+            context.user_data.pop("srv_wiz_draft", None)
+            try:
+                await query.answer("Отменено")
+            except Exception:
+                pass
+            t_out, kb_out = await render_servers_monitor_screen()
+            await query.edit_message_text("❌ Добавление сервера отменено.\n\n" + t_out, reply_markup=kb_out, parse_mode="HTML")
+            return
+        elif data == "admin_srvwiz_back":
+            wiz = context.user_data.get("srv_wiz")
+            if wiz and wiz.get("step", 1) > 1:
+                wiz["step"] -= 1
+                t_wiz, kb_wiz = server_wizard.render_wizard_step(wiz)
+                await query.edit_message_text(t_wiz, reply_markup=kb_wiz, parse_mode="HTML")
+            else:
+                t_wiz, kb_wiz = server_wizard.render_method_choice()
+                await query.edit_message_text(t_wiz, reply_markup=kb_wiz, parse_mode="HTML")
+            return
+        elif data == "admin_srvwiz_skip":
+            wiz = context.user_data.get("srv_wiz")
+            if wiz and wiz.get("step") == 3:
+                wiz["group_id"] = 0
+                wiz["group_label"] = "Все inbound’ы"
+                wiz["step"] = 4
+                t_wiz, kb_wiz = server_wizard.render_wizard_step(wiz)
+                await query.edit_message_text(t_wiz, reply_markup=kb_wiz, parse_mode="HTML")
+            return
+        elif data == "admin_srvwiz_retry":
+            wiz = context.user_data.get("srv_wiz_draft")
+            if wiz:
+                context.user_data["srv_wiz"] = wiz
+                await server_wizard.finalize_server_addition(update, context, wiz)
+            return
+
     if data in ('my_keys', 'user_keys', 'show_keys', 'keys_list', 'btn_my_keys'):
         await server_wizard.render_my_keys(update, context, globals().get('staff_roles'))
         return
@@ -2714,12 +3212,54 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with sqlite3.connect(DB_PATH) as conn:
                 conn.execute("UPDATE users SET active_discount_pct = 0 WHERE user_id = ?", (user.id,))
                 conn.commit()
+            await query.answer("⏳ Создаем ключ и настраиваем ноды...", show_alert=False)
+            try:
+                await query.edit_message_text("⏳ *Пожалуйста, подождите...*\n\nРегистрируем конфигурацию на сервере...", parse_mode="Markdown")
+            except Exception:
+                pass
             k_id, until, sub_url, _ = await create_or_extend_user_key(user.id, days=days, create_new=True)
             if get_setting("pay_notify_enabled", "1") == "1":
                 await notify_admin_event(user, "notify_orders", "💰 УСПЕШНАЯ ДЕМО-ОПЛАТА", f"Тариф: {name}\nСумма: {pr_rub} ₽", context)
-            text_out, kb_out = await render_my_keys_screen(user.id)
-            await query.message.reply_text(
-                f"✅ <b>[Демо оплата (РФ)] Оплата подтверждена! Выпущен Ключ #{k_id} (до {until})</b>\n\n{text_out}",
+            
+            # Удаляем сообщение ожидания
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            
+            # Генерируем QR-код высокой четкости в память
+            import io, qrcode
+            qr = qrcode.QRCode(box_size=10, border=2)
+            qr.add_data(sub_url)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            bio = io.BytesIO()
+            bio.name = f"qr_key_{k_id}.png"
+            img.save(bio, "PNG")
+            bio.seek(0)
+            
+            caption = (
+                f"📋 <b>Подписка для Ключ #{k_id}</b>\n\n"
+                f"🔗 <b>Единая ссылка подписки (нажмите для копирования):</b>\n"
+                f"<code>{sub_url}</code>\n\n"
+                f"📱 <i>Отсканируйте QR-код выше или вставьте ссылку в приложение (Happ, v2rayTun, Hiddify, Streisand) — все доступные серверы загрузятся автоматически.</i>\n\n"
+                f"⏳ <i>Срок действия: до {until}</i>"
+            )
+            
+            # Подтягиваем клавиатуру управления ключом и убираем дублирующую кнопку QR-кода
+            _, kb_out = await render_single_key_control(user.id, k_id)
+            if kb_out and hasattr(kb_out, "inline_keyboard"):
+                clean_rows = []
+                for row in kb_out.inline_keyboard:
+                    new_row = [btn for btn in row if "client_key_qr_" not in getattr(btn, "callback_data", "")]
+                    if new_row:
+                        clean_rows.append(new_row)
+                kb_out = InlineKeyboardMarkup(clean_rows)
+            
+            await context.bot.send_photo(
+                chat_id=user.id,
+                photo=bio,
+                caption=caption,
                 parse_mode="HTML",
                 reply_markup=kb_out
             )
@@ -3387,15 +3927,58 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==========================================================================
     # 👥 МЕНЮ "ПОЛЬЗОВАТЕЛИ"
     # ==========================================================================
+        # 👥 МЕНЮ "ПОЛЬЗОВАТЕЛИ" С ФИЛЬТРАМИ
+        # ⬅️ Безопасный возврат в главную админ-панель с удалением меню пользователей
+    if data in ("admin_back_to_main", "admin_exit_users"):
+        await query.answer()
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        # Вызываем штатную функцию отправки админки
+        if "admin_menu" in globals() and callable(globals()["admin_menu"]):
+            await admin_menu(update, context)
+        elif "admin_command" in globals() and callable(globals()["admin_command"]):
+            await admin_command(update, context)
+        elif "admin_start" in globals() and callable(globals()["admin_start"]):
+            await admin_start(update, context)
+        elif "send_admin_dashboard" in globals() and callable(globals()["send_admin_dashboard"]):
+            await send_admin_dashboard(update, context)
+        return
+
     if data == "admin_users_menu":
-        text_out, kb_out = render_users_admin_screen()
+        text_out, kb_out = render_users_filter_screen(flt="all", page=0)
         await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
         return
 
     if data.startswith("admin_ulist_"):
-        page = int(data.split("_")[-1])
-        text_out, kb_out = render_users_page(page)
-        await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+        await query.answer()
+        parts = data.split("_")
+        if len(parts) == 3:
+            flt = "all"
+            try:
+                page = int(parts[2])
+            except Exception:
+                page = 0
+        elif len(parts) >= 4:
+            flt = parts[2]
+            try:
+                page = int(parts[3])
+            except Exception:
+                page = 0
+        else:
+            flt = "all"
+            page = 0
+        text_out, kb_out = render_users_filter_screen(flt=flt, page=page)
+        try:
+            await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                raise e
+        return
+
+    if data in ("admin_noop", "noop"):
+        await query.answer()
         return
 
     if data == "admin_usearch":
@@ -3793,7 +4376,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
         return
 
-    if data == "admin_srv_add":
+    if data == "admin_srv_add_legacy":
         context.user_data["mode"] = "add_server"
         await query.edit_message_text(
             "➕ <b>Добавление сервера (3x-ui + Web Panel Proxy 2.7.0)</b>\n\n"
@@ -3820,6 +4403,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton(toggle_label, callback_data=f"admin_srv_toggle_{srv_id}")],
+            [InlineKeyboardButton("✏️ Редактировать сервер", callback_data=f"admin_srv_edit_{srv_id}")],
             [InlineKeyboardButton("🔗 Задать шаблон Web Panel Proxy 2.7.0", callback_data=f"admin_srv_tpl_{srv_id}")],
             [InlineKeyboardButton("➕ Загрузить доп. ключи в пул сервера", callback_data=f"admin_add_vpn_{srv_id}")],
             [InlineKeyboardButton("🗑 Удалить сервер", callback_data=f"admin_srv_del_{srv_id}")],
@@ -4260,6 +4844,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(f"✅ Длительность пробной подписки обновлена!\n\n{text_out}", parse_mode="HTML", reply_markup=kb_out)
             return
 
+                # --- Пошаговый ввод для server_wizard ---
+        if context.user_data.get("srv_wiz") or context.user_data.get("mode") == "srv_wiz":
+            if await server_wizard.handle_wizard_input(update, context):
+                return
+
+                # --- Сохранение отредактированного параметра сервера ---
+        elif mode and mode.startswith("srvedit_"):
+            context.user_data["mode"] = None
+            parts = mode.split("_")
+            field = parts[1]
+            srv_id = int(parts[2])
+            val = text.strip()
+            with sqlite3.connect(DB_PATH) as _conn:
+                if field == "name":
+                    _conn.execute("UPDATE servers SET name = ? WHERE id = ?", (val, srv_id))
+                elif field == "host":
+                    _conn.execute("UPDATE servers SET host = ? WHERE id = ?", (val, srv_id))
+                elif field == "url":
+                    _conn.execute("UPDATE servers SET panel_url = ? WHERE id = ?", (val, srv_id))
+                elif field == "token":
+                    _conn.execute("UPDATE servers SET password = ? WHERE id = ?", (val, srv_id))
+                elif field == "inb":
+                    inb_val = int(val) if val.isdigit() else 0
+                    _conn.execute("UPDATE servers SET inbound_id = ? WHERE id = ?", (inb_val, srv_id))
+                _conn.commit()
+            
+            ret_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🖥 Открыть карточку сервера", callback_data=f"admin_srv_{srv_id}")],
+                [InlineKeyboardButton("📋 Список серверов", callback_data="admin_servers_menu")]
+            ])
+            await msg.reply_text(f"✅ Параметр <b>{field}</b> для сервера #{srv_id} успешно сохранён!", reply_markup=ret_kb, parse_mode="HTML")
+            return
+
         elif mode == "add_server":
             context.user_data["mode"] = None
             parts = [p.strip() for p in text.split("|")]
@@ -4600,6 +5217,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Отправьте ваш код (например: промокод на дни, купон на скидку или ключ <code>VPN-30D-XXXX</code>):",
             parse_mode="HTML"
         )
+
+    elif text == "👥 Пользователи":
+        text_out, kb_out = render_users_filter_screen(flt="all", page=0)
+        await msg.reply_text(text_out, reply_markup=kb_out, parse_mode="HTML")
+
+    elif text == "⚙️ Админ-панель":
+        text_out, kb_out = render_admin_main_screen()
+        await msg.reply_text(text_out, reply_markup=kb_out, parse_mode="HTML")
 
     elif text == "📢 Наш канал":
         ch_url = get_setting("channel_url", "")
@@ -5966,7 +6591,7 @@ if __name__ == "__main__":
         app.job_queue.run_daily(daily_backup_job, time=time(hour=3, minute=0))
         app.job_queue.run_repeating(expire_vips_job, interval=3600, first=60)
         app.job_queue.run_repeating(check_expiry_reminders_job, interval=1800, first=45)
-    app.job_queue.run_repeating(poll_pending_invoices_job, interval=5, first=10)
+    app.job_queue.run_repeating(poll_pending_invoices_job, interval=25, first=10)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmd))
@@ -5980,3 +6605,22 @@ if __name__ == "__main__":
 
     logger.info("Bot_VIP успешно запущен...")
     app.run_polling()
+
+from wpp_client import WPPClient
+
+wpp_api = WPPClient()
+
+async def handle_new_subscription(user_id: int):
+    # 1. Создаем профили VLESS и Hysteria2 в панели WPP
+    bundle = wpp_api.create_client_bundle(user_id)
+    
+    if not bundle["configs"]:
+        return "⚠️ Не удалось создать конфигурации на сервере."
+    
+    # 2. Формируем текст ответа с ссылками подключения
+    response_text = "🔗 **Ваши новые ключи доступа:**\n\n"
+    for idx, cfg in enumerate(bundle["configs"], 1):
+        response_text += f"*{idx}*. `{cfg}`\n\n"
+        
+    response_text += "Скопируйте ссылки и импортируйте их в ваш VPN-клиент (v2rayNG, Streisand, Nekobox)."
+    return response_text

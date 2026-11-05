@@ -1,3 +1,42 @@
+
+async def deliver_bot_license_after_payment(context, user_id: int, tariff_name: str, days: int):
+    import secrets, sqlite3
+    lic_key = f"VIP-{secrets.token_hex(4).upper()}-{secrets.token_hex(4).upper()}"
+    days_label = "Бессрочно (LifeTime)" if days == 0 else f"{days} дней"
+    
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO bot_licenses (lic_key, buyer_note, bound_admin_id, is_active) VALUES (?, ?, ?, 1)",
+                (lic_key, f"Куплен {tariff_name} ({days_label})", str(user_id))
+            )
+            conn.commit()
+    except Exception as e:
+        import logging
+        logging.error(f"Ошибка сохранения купленной лицензии: {e}")
+
+    text_delivery = (
+        f"🎉 <b>Поздравляем с приобретением Bot_VIP!</b>\n\n"
+        f"🔑 <b>Ваш лицензионный ключ:</b>\n"
+        f"<code>{lic_key}</code>\n"
+        f"⏳ <b>Срок действия:</b> {days_label}\n\n"
+        f"📦 <b>Официальный репозиторий GitHub:</b>\n"
+        f"https://github.com/Bandito2025/Bot_VIP\n\n"
+        f"⚡ <b>Команда быстрой установки в 1 клик (Ubuntu 22.04/24.04):</b>\n"
+        f"<code>curl -sSL https://raw.githubusercontent.com/Bandito2025/Bot_VIP/main/install.sh | bash</code>\n\n"
+        f"📖 <b>Краткая инструкция по запуску:</b>\n"
+        f"1. Арендуйте чистый VPS/сервер с Ubuntu 22.04 или 24.04.\n"
+        f"2. Подключитесь по SSH и вставьте команду установки выше.\n"
+        f"3. Укажите токен от @BotFather и ваш Telegram ID администратора.\n"
+        f"4. В панели бота вставьте выданный выше лицензионный ключ."
+    )
+    try:
+        await context.bot.send_message(chat_id=user_id, text=text_delivery, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        import logging
+        logging.error(f"Не удалось доставить лицензию пользователю {user_id}: {e}")
+
+
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 import asyncio
 
@@ -1793,10 +1832,21 @@ def _old_unused_dossier(target_id: int) -> tuple[str, InlineKeyboardMarkup]:
 # ==============================================================================
 # 💳 ДВИЖОК ОПЛАТ И ТАРИФОВ
 # ==============================================================================
-def get_active_tariffs():
-    with sqlite3.connect(DB_PATH) as conn:
-        cur = conn.execute("SELECT id, group_name, name, days, price_rub, price_stars FROM tariffs WHERE is_active = 1 ORDER BY price_rub ASC")
-        return cur.fetchall()
+def get_active_tariffs(for_bot: bool = False):
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            target = 1 if for_bot else 0
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(tariffs)").fetchall()]
+            stars_col = "price_stars" if "price_stars" in cols else "0"
+            act_cond = "AND is_active = 1" if "is_active" in cols else ""
+            grp_val = "'Лицензия Бота'" if for_bot else "'VPN'"
+            sql = f"SELECT id, {grp_val}, name, days, price_rub, {stars_col} FROM tariffs WHERE is_bot = {target} {act_cond} ORDER BY price_rub ASC"
+            return conn.execute(sql).fetchall()
+    except Exception as e:
+        import logging
+        logging.error(f"get_active_tariffs error: {e}")
+        return []
+
 
 def get_tariff_by_id(t_id: int):
     with sqlite3.connect(DB_PATH) as conn:
@@ -2456,20 +2506,13 @@ async def poll_pending_invoices_job(context: ContextTypes.DEFAULT_TYPE):
                     conn.commit()
 
                 if is_lic:
-                    now = datetime.now()
-                    lic_token = f"LIC-BOT-{user_id}-{secrets.token_hex(3).upper()} (до {(now + timedelta(days=days)).strftime('%Y-%m-%d')})"
-                    with sqlite3.connect(DB_PATH) as conn:
-                        conn.execute("UPDATE users SET is_vip = 1, bot_license = ? WHERE user_id = ?", (lic_token, user_id))
-                        conn.commit()
                     try:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=f"🎉 <b>Оплата прошла успешно!</b> Лицензия Бота активирована на {days} дн.\n\n🔐 Токен лицензии: <code>{lic_token}</code>",
-                            parse_mode="HTML",
-                            protect_content=True
-                        )
+                        with sqlite3.connect(DB_PATH) as conn:
+                            conn.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (user_id,))
+                            conn.commit()
+                        await deliver_bot_license_after_payment(context, user_id, tariff_name, days)
                     except Exception as ex_u:
-                        logger.warning(f"Send bot lic err: {ex_u}")
+                        logger.error(f"Deliver bot license error (poll): {ex_u}")
                 else:
                     try:
                         k_id, until, sub_url, _ = await create_or_extend_user_key(user_id, days=days, create_new=True)
@@ -2520,7 +2563,7 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
         t_row = get_tariff_by_id(t_id)
         if t_row:
             _, grp, tariff_name, days, pr_rub, _ = t_row
-            if "Бота" in grp:
+            if any(x in str(grp).lower() or x in str(tariff_name).lower() for x in ("бот", "лицензия")):
                 is_bot_lic = True
 
     display_rub = total_amount if currency == "XTR" else (total_amount / 100.0)
@@ -2531,17 +2574,13 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
         conn.commit()
 
     if is_bot_lic:
-        now = datetime.now()
-        lic_token = f"LIC-BOT-{user.id}-{secrets.token_hex(3).upper()} (до {(now + timedelta(days=days)).strftime('%Y-%m-%d')})"
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("UPDATE users SET is_vip = 1, bot_license = ? WHERE user_id = ?", (lic_token, user.id))
-            conn.commit()
-        await update.message.reply_text(
-            f"🎉 <b>Оплата прошла успешно! Лицензия Бота активирована на {days} дн.</b>\n\n"
-            f"🔐 Токен лицензии: <code>{lic_token}</code>",
-            parse_mode="HTML",
-            protect_content=True
-        )
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (user.id,))
+                conn.commit()
+            await deliver_bot_license_after_payment(context, user.id, tariff_name, days)
+        except Exception as ex_u:
+            logger.error(f"Deliver bot license error (stars): {ex_u}")
     else:
         k_id, until, sub_url, _ = await create_or_extend_user_key(user.id, days=days, create_new=True)
         await update.message.reply_text(
@@ -2674,14 +2713,29 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 👥 ИНТЕРФЕЙС "ПОЛЬЗОВАТЕЛИ" С ФИЛЬТРАМИ, РАДИОКНОПКАМИ И ПАГИНАЦИЕЙ
 # ==============================================================================
 def render_admin_main_screen():
-    text = """👑 <b>Панель управления Bot_VIP</b>
-
-Выберите нужный раздел:"""
+    if "build_admin_dashboard_text" in globals():
+        text = build_admin_dashboard_text()
+    else:
+        text = "⚙️ <b>Админ-панель</b>"
     try:
         kb = admin_dashboard_keyboard()
+        if kb and hasattr(kb, "inline_keyboard"):
+            kb_rows = [list(row) for row in kb.inline_keyboard if not any(getattr(b, "callback_data", "") in ("admin_back_main", "start_back_main") for b in row)]
+            
+            is_pro = staff_roles.is_pro_edition(get_setting)
+            trial_used = get_setting("pro_trial_used", "0") == "1"
+            if not is_pro and not trial_used:
+                kb_rows.append([InlineKeyboardButton("🎁 Пробник PRO на 7 дней 💎", callback_data="admin_pro_trial_info")])
+            elif not is_pro and trial_used:
+                kb_rows.append([InlineKeyboardButton("🔒 PRO доступ (Купить) 💎", callback_data="lic_admin_menu")])
+
+            kb_rows.append([InlineKeyboardButton("✏️ Редактирование текстов и баннеров", callback_data="cms_open_menu")])
+            kb_rows.append([InlineKeyboardButton("🔐 Лицензии на бота (Продажи)", callback_data="lic_admin_menu")])
+            kb_rows.append([InlineKeyboardButton("🈴 На главную", callback_data="start_back_main")])
+            kb = InlineKeyboardMarkup(kb_rows)
     except Exception as e:
         import logging
-        logging.error(f"Ошибка вызова admin_dashboard_keyboard: {e}")
+        logging.error(f"Ошибка сборки клавиатуры в render_admin_main_screen: {e}")
         kb = None
     return text, kb
 
@@ -3133,7 +3187,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disc_pct = info[19] if (info and len(info) > 19) else 0
         disc_line = f"\n🎫 <b>Активен купон на скидку: -{disc_pct}%!</b>\n" if disc_pct > 0 else ""
 
-        tariffs = [t for t in get_active_tariffs() if "Бота" not in t[1]]
+        tariffs = get_active_tariffs(for_bot=False)
         kb_rows = []
         for t_id, grp, name, days, pr_rub, pr_stars in tariffs:
             final_rub = max(1, int(pr_rub * (100 - disc_pct) / 100)) if disc_pct > 0 else pr_rub
@@ -3153,7 +3207,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "order_bot":
         await notify_admin_event(user, "notify_menu", "🔘 Открытие тарифов Бота", "Выбор тарифа Бота", context)
-        tariffs = [t for t in get_active_tariffs() if "Бота" in t[1]]
+        tariffs = get_active_tariffs(for_bot=True)
         kb_rows = []
         for t_id, grp, name, days, pr_rub, pr_stars in tariffs:
             kb_rows.append([
@@ -3327,7 +3381,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not yoo_shop or not yoo_sec or "example" in yoo_sec:
                 await query.answer("⚠️ ЮKassa временно не настроена администратором.", show_alert=True)
                 return
-            is_lic = 1 if "Бота" in grp else 0
+            is_lic = 1 if any(x in str(grp).lower() or x in str(tariff_name).lower() for x in ("бот", "лицензия")) else 0
             ret_url = f"https://t.me/{(await context.bot.get_me()).username}"
             pay_url, inv_id = await autopay.create_yookassa_payment(
                 shop_id=yoo_shop,
@@ -3361,7 +3415,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not cp_token:
                 await query.answer("⚠️ Crypto Pay временно не настроен администратором.", show_alert=True)
                 return
-            is_lic = 1 if "Бота" in grp else 0
+            is_lic = 1 if any(x in str(grp).lower() or x in str(tariff_name).lower() for x in ("бот", "лицензия")) else 0
             pay_url, inv_id = await autopay.create_cryptopay_payment(
                 token=cp_token,
                 amount_usdt=usdt_amount,
@@ -5206,6 +5260,100 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    
+    if mode == "lic_wizard_name":
+        context.user_data["lic_temp_name"] = text.strip()
+        context.user_data["mode"] = "lic_wizard_days"
+        await msg.reply_text(
+            f"⏳ <b>Шаг 2 из 3: Количество дней</b>\n\n"
+            f"Тариф: <b>{html.escape(text.strip())}</b>\n"
+            f"Введите количество дней действия ключа (число: <code>30</code>, <code>90</code>, <code>365</code> или <code>0</code> для бессрочного безлимита):",
+            parse_mode="HTML"
+        )
+        return
+
+    if mode == "lic_wizard_days":
+        try:
+            d_val = int(text.strip())
+            if d_val < 0:
+                raise ValueError
+        except ValueError:
+            await msg.reply_text("❌ Введите целое неотрицательное число дней (например, 30 или 0):")
+            return
+        context.user_data["lic_temp_days"] = d_val
+        context.user_data["mode"] = "lic_wizard_price"
+        d_lbl = "Бессрочно (0)" if d_val == 0 else f"{d_val} дн."
+        await msg.reply_text(
+            f"💰 <b>Шаг 3 из 3: Цена тарифа</b>\n\n"
+            f"Срок: <b>{d_lbl}</b>\n"
+            f"Введите стоимость в рублях (число, например: <code>9999</code>):",
+            parse_mode="HTML"
+        )
+        return
+
+    if mode == "lic_wizard_price":
+        try:
+            pr_val = float(text.strip().replace(",", "."))
+            if pr_val <= 0:
+                raise ValueError
+        except ValueError:
+            await msg.reply_text("❌ Введите корректную цену числом (например, 9999):")
+            return
+        p_name = context.user_data.get("lic_temp_name", "Тариф Бота")
+        p_days = context.user_data.get("lic_temp_days", 0)
+        context.user_data["mode"] = None
+        
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                t_cols = [r[1] for r in conn.execute("PRAGMA table_info(tariffs)").fetchall()]
+                c_grp = next((c for c in t_cols if c in ("category", "grp", "group_name", "tariff_group", "type", "tag")), t_cols[1] if len(t_cols) > 1 else None)
+                c_name = next((c for c in t_cols if c in ("name", "title", "plan_name")), t_cols[2] if len(t_cols) > 2 else "name")
+                c_days = next((c for c in t_cols if c in ("days", "duration", "duration_days", "period")), None)
+                c_rub = next((c for c in t_cols if c in ("price_rub", "price", "cost", "amount")), None)
+                c_stars = next((c for c in t_cols if c in ("price_stars", "stars")), None)
+                c_act = next((c for c in t_cols if c in ("is_active", "active", "status")), None)
+                
+                f_list = []
+                v_list = []
+                if c_grp:
+                    f_list.append(c_grp)
+                    v_list.append("Лицензия Бота")
+                if c_name:
+                    f_list.append(c_name)
+                    v_list.append(p_name)
+                if c_days:
+                    f_list.append(c_days)
+                    v_list.append(p_days)
+                if c_rub:
+                    f_list.append(c_rub)
+                    v_list.append(pr_val)
+                if c_stars:
+                    f_list.append(c_stars)
+                    v_list.append(int(pr_val // 2))
+                if c_act:
+                    f_list.append(c_act)
+                    v_list.append(1)
+                
+                q_cols = ", ".join(f_list)
+                q_ph = ", ".join(["?"] * len(v_list))
+                conn.execute(f"INSERT INTO tariffs ({q_cols}) VALUES ({q_ph})", v_list)
+                conn.commit()
+        except Exception as e:
+            await msg.reply_text(f"❌ Ошибка сохранения тарифа: {e}")
+            return
+            
+        d_lbl = "Бессрочно (0)" if p_days == 0 else f"{p_days} дн."
+        await msg.reply_text(
+            f"✅ <b>Тариф бота успешно создан и опубликован!</b>\n\n"
+            f"📌 Название: <b>{html.escape(p_name)}</b>\n"
+            f"⏳ Срок: <b>{d_lbl}</b>\n"
+            f"💵 Цена: <b>{pr_val:.0f} ₽</b>\n\n"
+            f"Клиенты уже могут выбрать его в меню «🤖 Купить такого бота».",
+            parse_mode="HTML",
+            reply_markup=main_keyboard(user.id)
+        )
+        return
+
     if mode == "order_bot_input":
         context.user_data["mode"] = None
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🤖 Создать ключ лицензии БОТА (365д)", callback_data="admin_gen_BOT_365")]])
@@ -5323,7 +5471,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disc_pct = info[19] if (info and len(info) > 19) else 0
         disc_line = f"\n🎫 <b>Активна ваша скидка по купону: -{disc_pct}%!</b>\n" if disc_pct > 0 else ""
 
-        tariffs = [t for t in get_active_tariffs() if "Бота" not in t[1]]
+        tariffs = get_active_tariffs(for_bot=True)
         kb_rows = []
         for t_id, grp, name, days, pr_rub, pr_stars in tariffs:
             final_rub = max(1, int(pr_rub * (100 - disc_pct) / 100)) if disc_pct > 0 else pr_rub
@@ -5476,27 +5624,32 @@ CMS_SECTIONS = {
     "support": ("💬 Ссылка: Поддержка", "cms_support_url", ""),
 }
 
-def build_tariffs_block() -> str:
+def build_tariffs_block():
     try:
         with sqlite3.connect(DB_PATH) as conn:
-            rows = conn.execute("SELECT name, days, price_rub FROM tariffs WHERE is_active = 1 ORDER BY id ASC").fetchall()
-        if rows:
-            lines = ["📋 <b>Тарифы:</b>"]
-            for name, days, rub in rows:
-                clean_name = name if name.startswith("📱") else f"📱 {name}"
-                lines.append(f"• {clean_name} — <b>{rub} ₽</b>")
-            return "\n".join(lines)
-    except Exception:
-        pass
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(tariffs)").fetchall()]
+            act_cond = "AND is_active = 1" if "is_active" in cols else ""
+            rows = conn.execute(
+                f"SELECT name, price_rub FROM tariffs WHERE is_bot = 0 {act_cond} ORDER BY price_rub ASC"
+            ).fetchall()
+            if rows:
+                lines = ["📋 Тарифы:"]
+                for name, price in rows:
+                    p_str = int(price) if float(price).is_integer() else price
+                    lines.append(f"• {name} — {p_str} ₽")
+                return "\n".join(lines)
+    except Exception as e:
+        import logging
+        logging.error(f"build_tariffs_block error: {e}")
     return (
-        "📋 <b>Тарифы:</b>\n"
-        "• 📱 30 Дней 1 Устр. — <b>200 ₽</b>\n"
-        "• 📱 60 Дней 1 Устр. — <b>350 ₽</b>\n"
-        "• 📱 90 Дней 1 Устр. — <b>500 ₽</b>\n"
-        "• 📱 180 Дней 1 Устр. — <b>999 ₽</b>\n"
-        "• 📱 365 Дней 1 Устр. — <b>1799 ₽</b>\n"
-        "• 📱 Акция 30дней 2Устроиства — <b>150 ₽</b>\n"
-        "• 📱 Акция 60дней 2Устроиства — <b>250 ₽</b>"
+        "📋 Тарифы:\n"
+        "• 📱 Акция 30дней 2Устроиства — 150 ₽\n"
+        "• 📱 30 Дней 1 Устр. — 199 ₽\n"
+        "• 📱 Акция 60дней 2Устроиства — 250 ₽\n"
+        "• 📱 60 Дней 1 Устр. — 350 ₽\n"
+        "• 📱 90 Дней 1 Устр. — 500 ₽\n"
+        "• 📱 180 Дней 1 Устр. — 999 ₽\n"
+        "• 📱 365 Дней 1 Устр. — 1790 ₽"
     )
 
 def build_custom_start_content(user_id: int):
@@ -6247,6 +6400,17 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
 
 
     # 8. Управление лицензиями проданных копий бота
+    
+    if data == "lic_add_tariff_step1":
+        await query.answer()
+        context.user_data["mode"] = "lic_wizard_name"
+        await query.message.reply_text(
+            "📝 <b>Шаг 1 из 3: Название тарифа</b>\n\n"
+            "Введите название тарифа бота (например: <code>🚀 Старт 30 дней</code> или <code>♾ Безлимит</code>):",
+            parse_mode="HTML"
+        )
+        return
+
     if data == "lic_admin_menu":
         await query.answer()
         if not is_any_admin_ckm(user.id):
@@ -6254,7 +6418,8 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
         with sqlite3.connect(DB_PATH) as conn:
             rows = conn.execute("SELECT id, lic_key, bound_ip, bound_admin_id, is_active FROM bot_licenses ORDER BY id DESC LIMIT 15").fetchall()
         lines = ["🔐 <b>Управление лицензиями Bot_VIP</b>\n"]
-        kb_rows = [[InlineKeyboardButton("➕ Сгенерировать новый ключ продажи", callback_data="lic_gen_new")]]
+        kb_rows = [[InlineKeyboardButton("➕ Добавить тариф бота (3 шага)", callback_data="lic_add_tariff_step1")],
+            [InlineKeyboardButton("➕ Сгенерировать новый ключ продажи", callback_data="lic_gen_new")]]
         for lid, lkey, bip, badm, lact in rows:
             st = "🟢" if lact else "🔴"
             ip_info = f"IP: {bip} (ID: {badm})" if bip else "Свободен (ждет установки)"

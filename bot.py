@@ -2507,42 +2507,9 @@ async def poll_pending_invoices_job(context: ContextTypes.DEFAULT_TYPE):
 
                 if is_lic:
                     try:
-                        with sqlite3.connect(DB_PATH) as conn:
-                            conn.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (user_id,))
-                            conn.commit()
                         await deliver_bot_license_after_payment(context, user_id, tariff_name, days)
                     except Exception as ex_u:
-                        logger.error(f"Deliver bot license error (poll): {ex_u}")
-                else:
-                    try:
-                        k_id, until, sub_url, _ = await create_or_extend_user_key(user_id, days=days, create_new=True)
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"🎉 <b>Оплата получена!</b> Создан Ключ #{k_id} (до {until})\n\n"
-                                f"🔗 <b>Единая ссылка подписки:</b>\n<code>{html.escape(sub_url)}</code>\n\n"
-                                f"Все ваши ключи доступны в разделе «🔑 Мои ключи»."
-                            ),
-                            parse_mode="HTML",
-                            protect_content=True
-                        )
-                    except Exception as ex_k:
-                        logger.error(f"Key issue error: {ex_k}")
-
-                if get_setting("pay_notify_enabled", "1") == "1":
-                    try:
-                        await context.bot.send_message(
-                            chat_id=ADMIN_ID,
-                            text=(
-                                f"💰 <b>НОВАЯ АВТОМАТИЧЕСКАЯ ОПЛАТА ({provider.upper()})</b>\n\n"
-                                f"👤 Клиент: ID <code>{user_id}</code>\n"
-                                f"📋 Тариф: {html.escape(tariff_name)} ({days} дн.)\n"
-                                f"💵 Сумма: {price} ₽"
-                            ),
-                            parse_mode="HTML"
-                        )
-                    except Exception as ex_a:
-                        logger.warning(f"Admin notify err: {ex_a}")
+                        logger.warning(f"Send bot lic err: {ex_u}")
     except Exception as e:
         logger.error(f"poll_pending_invoices_job error: {e}")
 
@@ -3283,6 +3250,26 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with sqlite3.connect(DB_PATH) as conn:
                 conn.execute("UPDATE users SET active_discount_pct = 0 WHERE user_id = ?", (user.id,))
                 conn.commit()
+            # Если это покупка лицензии бота — выдаем лицензию, а не VPN
+            is_bot_order = False
+            try:
+                with sqlite3.connect(DB_PATH) as _c:
+                    _row = _c.execute('SELECT is_bot, name FROM tariffs WHERE id = ?', (t_id,)).fetchone()
+                    if _row and (_row[0] == 1 or any(x in str(_row[1]).lower() for x in ('бот', 'безлимит', 'lifetime'))):
+                        is_bot_order = True
+            except Exception:
+                if any(x in str(name).lower() for x in ('бот', 'безлимит', 'lifetime')):
+                    is_bot_order = True
+
+            if is_bot_order:
+                await query.answer('Выдаем лицензию Бота...', show_alert=False)
+                try:
+                    await query.edit_message_text('⏳ <b>Генерируем лицензионный ключ и готовим комплект развертывания...</b>', parse_mode='HTML')
+                except Exception:
+                    pass
+                await deliver_bot_license_after_payment(context, user.id, name, days)
+                return
+
             await query.answer("⏳ Создаем ключ и настраиваем ноды...", show_alert=False)
             try:
                 await query.edit_message_text("⏳ *Пожалуйста, подождите...*\n\nРегистрируем конфигурацию на сервере...", parse_mode="Markdown")

@@ -3414,6 +3414,84 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("⛔ Доступ запрещён.")
         return
 
+    
+    if data == "admin_pro_trial_info":
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        ch_url = get_setting("channel_url", "").strip() or "https://t.me/"
+        trial_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Подписаться на новостной канал", url=ch_url)],
+            [InlineKeyboardButton("🤖 Подписаться на бота @SVOII_VPN_bot", url="https://t.me/SVOII_VPN_bot")],
+            [InlineKeyboardButton("✅ Я подписался (Активировать PRO на 7 дней)", callback_data="admin_pro_trial_act")],
+            [InlineKeyboardButton("⬅️ Назад в админ-панель", callback_data="admin_back_main")]
+        ])
+        trial_text = (
+            "🎁 <b>Активация пробного PRO-доступа на 7 дней 💎</b>\n\n"
+            "Получите полный доступ ко всем PRO-функциям бота:\n"
+            "• Управление персоналом (Администраторы и Модераторы)\n"
+            "• Маркетинг, рассылки и промокоды\n"
+            "• Расширенная аналитика и уведомления\n\n"
+            "<b>Условие активации:</b>\n"
+            "1. Подпишитесь на наш официальный новостной канал\n"
+            "2. Нажмите кнопку подтверждения ниже\n\n"
+            "<i>(Пробный период выдается 1 раз на 7 дней)</i>"
+        )
+        await query.edit_message_text(trial_text, parse_mode="HTML", reply_markup=trial_kb, disable_web_page_preview=True)
+        return
+
+    if data == "admin_pro_trial_act":
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        if get_setting("pro_trial_used", "0") == "1":
+            await query.edit_message_text(
+                "⚠️ <b>Пробный период уже был использован!</b>\n\nВы можете приобрести постоянную лицензию в разделе «Лицензии».",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ В админ-панель", callback_data="admin_back_main")]])
+            )
+            return
+
+        ch_id = get_setting("channel_id", "").strip() or get_setting("channel_url", "").strip()
+        is_sub = True
+        if ch_id:
+            try:
+                target_chat = ch_id if ch_id.startswith("-100") or ch_id.startswith("@") else f"@{ch_id.split("/")[-1]}"
+                m = await context.bot.get_chat_member(chat_id=target_chat, user_id=user.id)
+                if m.status not in ("member", "administrator", "creator"):
+                    is_sub = False
+            except Exception:
+                is_sub = True
+
+        if not is_sub:
+            await query.edit_message_text(
+                "❌ <b>Вы не подписаны на новостной канал!</b>\n\nПожалуйста, подпишитесь на канал и повторите попытку.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📢 Перейти в канал", url=get_setting("channel_url", "https://t.me/"))],
+                    [InlineKeyboardButton("🔄 Проверить снова", callback_data="admin_pro_trial_act")],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back_main")]
+                ])
+            )
+            return
+
+        from datetime import datetime, timedelta
+        trial_until = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        set_setting("bot_edition_tier", "pro")
+        set_setting("pro_trial_until", trial_until)
+        set_setting("pro_trial_used", "1")
+
+        await query.edit_message_text(
+            f"🎉 <b>PRO-версия успешно активирована на 7 дней! 💎</b>\n\n"
+            f"📅 Активна до: <code>{trial_until}</code>\n"
+            f"Все закрытые PRO-разделы теперь доступны.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Перейти в админ-панель", callback_data="admin_back_main")]])
+        )
+        return
+
     if await staff_roles.handle_staff_callback(query, context, DB_PATH, ADMIN_ID, get_setting, set_setting):
         return
 
@@ -4050,6 +4128,86 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if act == "ban":
             toggle_column(target_id, "is_banned")
+            text_out, kb_out = render_single_user_dossier(target_id)
+            await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+            return
+
+        if act == "role":
+            try:
+                await query.answer()
+            except Exception:
+                pass
+            if not staff_roles.is_pro_edition(get_setting):
+                txt, kb = staff_roles.render_pro_locked_screen("Персонал")
+                clean_rows = [list(r) for r in kb.inline_keyboard if r]
+                clean_rows.append([InlineKeyboardButton("⬅️ Назад в досье", callback_data=f"admin_uact_backdos_{target_id}")])
+                await query.edit_message_text(txt, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(clean_rows))
+                return
+
+            cur_m = staff_roles.get_staff_member(DB_PATH, target_id)
+            cur_role = "Обычный клиент"
+            if cur_m:
+                cur_role = "Администратор" if cur_m.get("role") == "admin" else "Модератор"
+
+            role_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👑 Назначить Администратором 💎", callback_data=f"admin_uact_setadm_{target_id}")],
+                [InlineKeyboardButton("🛡 Назначить Модератором 💎", callback_data=f"admin_uact_setmod_{target_id}")],
+                [InlineKeyboardButton("❌ Снять права (Обычный клиент)", callback_data=f"admin_uact_delstaff_{target_id}")],
+                [InlineKeyboardButton("⬅️ Назад в досье", callback_data=f"admin_uact_backdos_{target_id}")]
+            ])
+            await query.edit_message_text(
+                f"👥 <b>Управление персоналом 💎</b>\n\n"
+                f"👤 Telegram ID: <code>{target_id}</code>\n"
+                f"🔰 Текущий статус: <b>{cur_role}</b>\n\n"
+                f"Выберите необходимую роль:",
+                parse_mode="HTML",
+                reply_markup=role_kb
+            )
+            return
+
+        if act == "setadm":
+            try:
+                await query.answer()
+            except Exception:
+                pass
+            if not staff_roles.is_pro_edition(get_setting):
+                txt, kb = staff_roles.render_pro_locked_screen("Персонал")
+                await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
+                return
+            ok, msg = staff_roles.add_staff_member(DB_PATH, target_id, "admin")
+            text_out, kb_out = render_single_user_dossier(target_id)
+            await query.edit_message_text(f"{msg}\n\n{text_out}", parse_mode="HTML", reply_markup=kb_out)
+            return
+
+        if act == "setmod":
+            try:
+                await query.answer()
+            except Exception:
+                pass
+            if not staff_roles.is_pro_edition(get_setting):
+                txt, kb = staff_roles.render_pro_locked_screen("Персонал")
+                await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
+                return
+            ok, msg = staff_roles.add_staff_member(DB_PATH, target_id, "moderator")
+            text_out, kb_out = render_single_user_dossier(target_id)
+            await query.edit_message_text(f"{msg}\n\n{text_out}", parse_mode="HTML", reply_markup=kb_out)
+            return
+
+        if act == "delstaff":
+            try:
+                await query.answer()
+            except Exception:
+                pass
+            staff_roles.remove_staff_member(DB_PATH, target_id)
+            text_out, kb_out = render_single_user_dossier(target_id)
+            await query.edit_message_text(f"✅ Права персонала сняты.\n\n{text_out}", parse_mode="HTML", reply_markup=kb_out)
+            return
+
+        if act == "backdos":
+            try:
+                await query.answer()
+            except Exception:
+                pass
             text_out, kb_out = render_single_user_dossier(target_id)
             await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
             return
@@ -5553,6 +5711,15 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
     ])
     kb_rows.append([InlineKeyboardButton(f"📊 Реферальный коэффициент: {ref_coeff:.1f}x", callback_data=f"ckm_refc_{uid}")])
 
+    # Кнопка персонала с кристаликом PRO 💎
+    cur_m = staff_roles.get_staff_member(DB_PATH, uid)
+    if cur_m:
+        r_name = "Админ" if cur_m.get("role") == "admin" else "Модер"
+        role_btn_text = f"👑 Роль: {r_name} 💎"
+    else:
+        role_btn_text = "👥 Персонал (Админ / Модер) 💎"
+    kb_rows.append([InlineKeyboardButton(role_btn_text, callback_data=f"admin_uact_role_{uid}")])
+
     ban_txt = "✅ Разблокировать" if is_ban else "🚫 Заблокировать"
     kb_rows.append([InlineKeyboardButton(ban_txt, callback_data=f"admin_uact_ban_{uid}")])
     kb_rows.append([
@@ -5843,7 +6010,17 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
         if "build_admin_dashboard_text" in globals() and "admin_dashboard_keyboard" in globals():
             txt = build_admin_dashboard_text()
             kb = admin_dashboard_keyboard()
-            kb_rows = [list(row) for row in kb.inline_keyboard]
+            # Премахване на междинния дубликат На главную
+            kb_rows = [list(row) for row in kb.inline_keyboard if not any(getattr(b, "callback_data", "") in ("admin_back_main", "start_back_main") for b in row)]
+            
+            # Бутон за 7-дневен PRO пробен период (показва се ако не е активиран PRO или пробник)
+            is_pro = staff_roles.is_pro_edition(get_setting)
+            trial_used = get_setting("pro_trial_used", "0") == "1"
+            if not is_pro and not trial_used:
+                kb_rows.append([InlineKeyboardButton("🎁 Пробник PRO на 7 дней 💎", callback_data="admin_pro_trial_info")])
+            elif not is_pro and trial_used:
+                kb_rows.append([InlineKeyboardButton("🔒 PRO доступ (Купить) 💎", callback_data="lic_admin_menu")])
+
             kb_rows.append([InlineKeyboardButton("✏️ Редактирование текстов и баннеров", callback_data="cms_open_menu")])
             kb_rows.append([InlineKeyboardButton("🔐 Лицензии на бота (Продажи)", callback_data="lic_admin_menu")])
             kb_rows.append([InlineKeyboardButton("🈴 На главную", callback_data="start_back_main")])

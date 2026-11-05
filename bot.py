@@ -21,7 +21,24 @@ import base64
 import socket
 import secrets
 import hashlib
+# --- SQLite AutoClose Context Fix ---
 import sqlite3
+_orig_sqlite_connect = sqlite3.connect
+
+class _AutoCloseConn(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return super().__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self.close()
+
+def _safe_sqlite_connect(*args, **kwargs):
+    if "factory" not in kwargs:
+        kwargs["factory"] = _AutoCloseConn
+    return _orig_sqlite_connect(*args, **kwargs)
+
+sqlite3.connect = _safe_sqlite_connect
+# ------------------------------------
 import logging
 import threading
 import importlib.util

@@ -412,11 +412,11 @@ def init_db():
         t_cnt = conn.execute("SELECT COUNT(*) FROM tariffs").fetchone()[0]
         if t_cnt == 0:
             default_tariffs = [
-                ("Единая подписка (3x-ui + Proxy)", "🔥 1 месяц (Все локации)", 30, 199, 100),
-                ("Единая подписка (3x-ui + Proxy)", "💎 3 месяца (Выгодно)", 90, 499, 250),
-                ("Единая подписка (3x-ui + Proxy)", "🚀 6 месяцев", 180, 899, 450),
-                ("Единая подписка (3x-ui + Proxy)", "👑 1 год (VIP Максимум)", 365, 1490, 750),
-                ("Единая подписка (3x-ui + Proxy)", "♾ Безлимит (Без срока)", 0, 2990, 1500),
+                ("Единая подписка (VIP VPN)", "🔥 1 месяц (Все локации)", 30, 199, 100),
+                ("Единая подписка (VIP VPN)", "💎 3 месяца (Выгодно)", 90, 499, 250),
+                ("Единая подписка (VIP VPN)", "🚀 6 месяцев", 180, 899, 450),
+                ("Единая подписка (VIP VPN)", "👑 1 год (VIP Максимум)", 365, 1490, 750),
+                ("Единая подписка (VIP VPN)", "♾ Безлимит (Без срока)", 0, 2990, 1500),
                 ("Лицензия Бота", "🤖 Аренда Бота (1 мес)", 30, 1500, 750),
                 ("Лицензия Бота", "🤖 Полная лицензия Бота (1 год)", 365, 5900, 2900),
             ]
@@ -453,8 +453,8 @@ def init_db():
         "ext_load_enabled": "0",
         "ext_core_edit_allowed": "0",
         "require_channel_sub": "0",
-        "text_welcome": "Добро пожаловать в <b>Bot_VIP</b>!\n\n🔑 Управляйте своими ключами в разделе <b>«🔑 Мои ключи»</b> или подключите новую подписку (<b>3x-ui + Web Panel Proxy 2.7.0</b>).",
-        "text_about": "🤖 <b>Bot_VIP</b> — единая система подключения 3x-ui + Web Panel Proxy 2.7.0 и продажи защищенных Telegram-ботов.",
+        "text_welcome": "Добро пожаловать в <b>Bot_VIP</b>!\n\n🔑 Управляйте своими ключами в разделе <b>«🔑 Мои ключи»</b> или подключите новую подписку (<b>VIP VPN</b>).",
+        "text_about": "🤖 <b>Bot_VIP</b> — единая система подключения VIP VPN и продажи защищенных Telegram-ботов.",
         "text_support": "✉️ <b>Напишите ваш вопрос одним сообщением:</b>\nОн будет сразу передан администратору, и вы получите ответ прямо в этом чате."
     }
     for d_key, d_val in defaults.items():
@@ -772,7 +772,7 @@ def render_extensions_diagnostics_screen(application=None) -> tuple[str, InlineK
     return text, InlineKeyboardMarkup(buttons)
 
 # ==============================================================================
-# 🌐 ДВИЖОК ИНТЕГРАЦИИ: 3X-UI API + WEB PANEL PROXY 2.7.0
+# 🌐 ДВИЖОК ИНТЕГРАЦИИ: VIP PROXY
 # ==============================================================================
 async def poll_node_live_status(srv_row) -> dict:
     srv = srv_row
@@ -901,7 +901,7 @@ def generate_3xui_link(inb: dict, client_uuid: str, host: str, country_flag: str
     """Генерация ссылки конфигурации из параметров инбаунда 3X-UI"""
     proto = inb.get("protocol", "vless").lower()
     port = inb.get("port")
-    remark = inb.get("remark") or f"3X-UI {proto.upper()}"
+    remark = inb.get("remark") or f"VIP {proto.upper()}"
     if not remark.startswith(country_flag):
         remark = f"{country_flag} {remark}"
         
@@ -1442,7 +1442,7 @@ async def _old_unused_my_keys(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         return (
             "🔑 <b>Мои ключи</b>\n\n"
             "У вас пока нет активных ключей.\n"
-            "Нажмите кнопку ниже, чтобы подключить единую подписку (3x-ui + Web Panel Proxy 2.7.0):",
+            "Нажмите кнопку ниже, чтобы подключить единую подписку (VIP VPN):",
             InlineKeyboardMarkup(kb_rows)
         )
 
@@ -1504,7 +1504,7 @@ async def render_single_key_control(user_id: int, key_id: int) -> tuple[str, Inl
         f"📊 <b>Трафик:</b> {tr_str} ({lim_str})\n"
         f"📱 <b>Лимит устройств:</b> {html.escape(dev_lim)}\n"
         f"⏳ <b>Срок действия:</b> до <code>{html.escape(exp_display)}</code>\n\n"
-        f"🔗 <b>Единая ссылка подписки (3x-ui + Proxy 2.7.0):</b>\n"
+        f"🔗 <b>Единая ссылка подписки (VIP VPN):</b>\n"
         f"<code>{html.escape(sub_url)}</code>\n\n"
         f"🔐 <b>Конфигурация ключа:</b>\n"
         f"<pre>{html.escape(cfg_txt)}</pre>"
@@ -2175,7 +2175,7 @@ async def redeem_tariff_key_async(user_id: int, key_code: str):
         else:
             k_id, new_until, sub_url, _ = await create_or_extend_user_key(user_id, days=days, create_new=True)
             return True, (
-                f"🔑 <b>Ключ #{k_id} (3x-ui + Web Panel Proxy 2.7.0) успешно активирован!</b>\n"
+                f"🔑 <b>Ключ #{k_id} (VIP VPN) успешно активирован!</b>\n"
                 f"📅 Действует до: <code>{new_until}</code>\n\n"
                 f"🔗 <b>Единая ссылка подписки:</b>\n"
                 f"<code>{html.escape(sub_url)}</code>\n\n"
@@ -2226,7 +2226,7 @@ def main_keyboard(user_id: int):
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 
-def build_admin_dashboard_text(mon_status: str = "✅ Активен (3x-ui + Proxy 2.7.0)") -> str:
+def build_admin_dashboard_text(mon_status: str = "✅ Активен (VIP VPN)") -> str:
     m = get_dashboard_metrics()
     return (
         ("⚙️ <b>Админ-панель</b>\n💎 <b>Лицензия:</b> <code>PRO Edition</code>\n\n" if staff_roles.is_pro_edition(get_setting) else "⚙️ <b>Админ-панель</b>\n🔒 <b>Лицензия:</b> <code>FREE Edition (Урезанная)</code>\n\n") +
@@ -2288,7 +2288,7 @@ async def render_servers_monitor_screen():
     if not servers:
         lines.append(
             "<i>Сервера еще не добавлены.\n"
-            "Нажмите «➕ Добавить сервер», чтобы подключить панель 3x-ui и Web Panel Proxy 2.7.0.</i>"
+            "Нажмите «➕ Добавить сервер», чтобы подключить панель серверы VPN.</i>"
         )
     else:
         for srv in servers:
@@ -2302,7 +2302,7 @@ async def render_servers_monitor_screen():
                 )
             elif st["online"]:
                 dot = "🟢"
-                p_badge = "3x-ui + Proxy 2.7" if p_type == "both" else p_type
+                p_badge = "VIP VPN 2.7" if p_type == "both" else p_type
                 lines.append(
                     f"{dot} <b>{html.escape(name)}</b> (<code>{html.escape(host)}</code>)\n"
                     f"Панель: онлайн | 🔑 {st.get('clients_online', 0)} онлайн | 📊 {st.get('traffic_str', '0 GB')} | 💻 {st.get('cpu_str', '0%')}\n"
@@ -2609,7 +2609,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     custom_welcome = get_setting(
         "text_welcome",
-        "Добро пожаловать в <b>Bot_VIP</b>!\n\n🔑 Управляйте своими ключами в разделе <b>«🔑 Мои ключи»</b> или подключите новую подписку (<b>3x-ui + Web Panel Proxy 2.7.0</b>)."
+        "Добро пожаловать в <b>Bot_VIP</b>!\n\n🔑 Управляйте своими ключами в разделе <b>«🔑 Мои ключи»</b> или подключите новую подписку (<b>VIP VPN</b>)."
     )
     await update.message.reply_text(
         f"Привет, <b>{html.escape(user.first_name)}</b>! {custom_welcome}",
@@ -3144,7 +3144,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb_rows.append([InlineKeyboardButton("✍️ Оставить заявку вручную", callback_data="manual_order_vpn")])
         kb_rows.append([InlineKeyboardButton("🔑 Мои ключи", callback_data="client_my_keys")])
         await query.message.reply_text(
-            f"📋 <b>Выберите тариф единой подписки (3x-ui + Web Panel Proxy 2.7.0):</b>{disc_line}\n"
+            f"📋 <b>Выберите тариф единой подписки (VIP VPN):</b>{disc_line}\n"
             f"После оплаты новый ключ мгновенно появится в разделе <b>«🔑 Мои ключи»</b>:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(kb_rows)
@@ -3287,7 +3287,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_invoice(
                     chat_id=user.id,
                     title=name,
-                    description=f"{grp} (3x-ui + Web Panel Proxy 2.7.0)",
+                    description=f"{grp} (VIP VPN)",
                     payload=f"tariff_{t_id}_{user.id}",
                     provider_token="",
                     currency="XTR",
@@ -3495,7 +3495,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"📋 <b>Подробности диагностики расширений</b>\n\n"
             f"📂 <b>Путь:</b> <code>{html.escape(EXTENSIONS_DIR)}</code>\n"
-            f"🔗 <b>Шлюз Web Panel Proxy 2.7.0 / Sub URL:</b>\n<code>{html.escape(sub_dom)}</code>\n\n"
+            f"🔗 <b>Шлюз VIP Proxy / Sub URL:</b>\n<code>{html.escape(sub_dom)}</code>\n\n"
             f"<b>Список файлов и модулей:</b>\n{details_list}",
             parse_mode="HTML",
             reply_markup=kb
@@ -3580,7 +3580,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"🌐 <b>Настройки Веб и Telegram Mini App</b>\n\n"
             f"📱 <b>URL Mini App кабинета:</b> <code>{html.escape(w_url)}</code>\n"
-            f"🔗 <b>Домен единой подписки (3x-ui + Proxy):</b>\n<code>{html.escape(s_dom)}</code>\n"
+            f"🔗 <b>Домен единой подписки (VIP VPN):</b>\n<code>{html.escape(s_dom)}</code>\n"
             f"🖧 <b>Локальный порт Sub-Aggregator:</b> <code>{SUB_PORT}</code>",
             parse_mode="HTML",
             reply_markup=kb
@@ -4080,7 +4080,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if data == "admin_usync_push":
-        await query.edit_message_text("⏳ <b>Выгрузка активных пользователей из БД во все панели 3x-ui...</b>", parse_mode="HTML")
+        await query.edit_message_text("⏳ <b>Выгрузка активных пользователей из БД во все серверы VPN...</b>", parse_mode="HTML")
         u_cnt, s_cnt = await sync_db_to_panels()
         text_out, kb_out = render_users_admin_screen()
         await query.edit_message_text(
@@ -4091,7 +4091,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "admin_usync_pull":
-        await query.edit_message_text("⏳ <b>Загрузка клиентов из панелей 3x-ui в БД бота...</b>", parse_mode="HTML")
+        await query.edit_message_text("⏳ <b>Загрузка клиентов из серверов VPN в БД бота...</b>", parse_mode="HTML")
         imp_cnt = await sync_panels_to_db()
         text_out, kb_out = render_users_admin_screen()
         await query.edit_message_text(
@@ -4259,7 +4259,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Отправьте параметры тарифа через вертикальную черту <code>|</code>:\n"
             "<code>Группа | Название тарифа | Дней (0 = Без срока) | Цена в рублях</code>\n\n"
             "<b>Пример:</b>\n"
-            "<code>Единая подписка (3x-ui + Proxy) | 🔥 2 месяца | 60 | 349</code>",
+            "<code>Единая подписка (VIP VPN) | 🔥 2 месяца | 60 | 349</code>",
             parse_mode="HTML"
         )
         return
@@ -4396,7 +4396,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "admin_srv_add_legacy":
         context.user_data["mode"] = "add_server"
         await query.edit_message_text(
-            "➕ <b>Добавление сервера (3x-ui + Web Panel Proxy 2.7.0)</b>\n\n"
+            "➕ <b>Добавление сервера (VIP VPN)</b>\n\n"
             "Отправьте данные сервера одной строкой через вертикальную черту <code>|</code>:\n\n"
             "<b>Формат 1 (Полная интеграция по API):</b>\n"
             "<code>Флаг Название | host:port | http://ip:port/path | login | password | inbound_id | https://sub.domain/sub</code>\n\n"
@@ -4421,7 +4421,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton(toggle_label, callback_data=f"admin_srv_toggle_{srv_id}")],
             [InlineKeyboardButton("✏️ Редактировать сервер", callback_data=f"admin_srv_edit_{srv_id}")],
-            [InlineKeyboardButton("🔗 Задать шаблон Web Panel Proxy 2.7.0", callback_data=f"admin_srv_tpl_{srv_id}")],
+            [InlineKeyboardButton("🔗 Задать шаблон VIP Proxy", callback_data=f"admin_srv_tpl_{srv_id}")],
             [InlineKeyboardButton("➕ Загрузить доп. ключи в пул сервера", callback_data=f"admin_add_vpn_{srv_id}")],
             [InlineKeyboardButton("🗑 Удалить сервер", callback_data=f"admin_srv_del_{srv_id}")],
             [InlineKeyboardButton("⬅️ Назад к списку серверов", callback_data="admin_servers_menu")]
@@ -4451,7 +4451,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "set_proxy_tpl"
         context.user_data["target_server_id"] = srv_id
         await query.edit_message_text(
-            f"🧩 <b>Шаблон Web Panel Proxy 2.7.0 для сервера #{srv_id}</b>\n\n"
+            f"🧩 <b>Шаблон VIP Proxy для сервера #{srv_id}</b>\n\n"
             f"Доступные переменные: <code>{{UUID}}</code>, <code>{{SUB_ID}}</code>, <code>{{USER_ID}}</code>, <code>{{HOST}}</code>, <code>{{PORT}}</code>, <code>{{NAME}}</code>.",
             parse_mode="HTML"
         )
@@ -4548,7 +4548,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         k_type = parts[2]
         days = int(parts[3])
         new_key = create_tariff_key(k_type, days)
-        label = "🌐 Единая подписка (3x-ui + Proxy 2.7.0)" if k_type == "VPN" else "🤖 Лицензия Бота"
+        label = "🌐 Единая подписка (VIP VPN)" if k_type == "VPN" else "🤖 Лицензия Бота"
         await query.message.reply_text(
             f"🔑 <b>Одноразовый ключ ({label} на {days} дн.) создан:</b>\n\n"
             f"<code>{new_key}</code>",
@@ -4920,7 +4920,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with sqlite3.connect(DB_PATH) as conn:
                 conn.execute("UPDATE servers SET proxy_template = ? WHERE id = ?", (text.strip(), srv_id))
                 conn.commit()
-            await msg.reply_text(f"✅ Шаблон Web Panel Proxy 2.7.0 сохранен для сервера #{srv_id}!", reply_markup=admin_dashboard_keyboard())
+            await msg.reply_text(f"✅ Шаблон VIP Proxy сохранен для сервера #{srv_id}!", reply_markup=admin_dashboard_keyboard())
             return
 
         elif mode == "set_subdom":
@@ -5173,7 +5173,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb_rows.append([InlineKeyboardButton(f"{name} — {price_str}", callback_data=f"buy_tariff_{t_id}")])
         kb_rows.append([InlineKeyboardButton("🔑 Мои ключи", callback_data="client_my_keys")])
         await msg.reply_text(
-            f"🌐 <b>Единая подписка Bot_VIP (3x-ui + Web Panel Proxy 2.7.0)</b>{disc_line}\n\n"
+            f"🌐 <b>Единая подписка Bot_VIP (VIP VPN)</b>{disc_line}\n\n"
             f"✅ Безлимитный трафик и высокая скорость\n"
             f"✅ Возможность иметь несколько ключей для разных устройств в разделе <b>«🔑 Мои ключи»</b>\n\n"
             f"Выберите подходящий тариф для покупки нового ключа:",
@@ -5269,7 +5269,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "ℹ️ О боте":
         custom_about = get_setting(
             "text_about",
-            "🤖 <b>Bot_VIP</b> — единая система подключения 3x-ui + Web Panel Proxy 2.7.0 и продажи защищенных Telegram-ботов."
+            "🤖 <b>Bot_VIP</b> — единая система подключения VIP VPN и продажи защищенных Telegram-ботов."
         )
         await msg.reply_text(custom_about, parse_mode="HTML")
 
@@ -5899,7 +5899,7 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
             kb = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("👥 Пользователи", callback_data="admin_users_menu"),
-                    InlineKeyboardButton("🖥 Серверы 3X-UI", callback_data="admin_servers_menu")
+                    InlineKeyboardButton("🖥 Серверы VPN", callback_data="admin_servers_menu")
                 ],
                 [
                     InlineKeyboardButton("💳 Оплата и Тарифы", callback_data="admin_payments_menu"),

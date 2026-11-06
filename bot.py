@@ -1,3 +1,24 @@
+async def process_paid_reset(target_type: str, item_id: str, user_id: int, context):
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            if target_type == "vpnreset":
+                k_id = int(item_id)
+                conn.execute("DELETE FROM key_devices WHERE key_id = ?", (k_id,))
+                conn.commit()
+                msg = f"✅ <b>Устройства успешно отвязаны!</b>\n\nСписок привязанных устройств для VPN-ключа #{k_id} полностью очищен. Теперь вы можете подключить новое устройство."
+            elif target_type == "botreset":
+                lic_key = str(item_id)
+                conn.execute("UPDATE bot_licenses SET server_hwid = NULL, server_ip = NULL WHERE lic_key = ?", (lic_key,))
+                conn.commit()
+                msg = f"✅ <b>Лицензия успешно отвязана от VPS!</b>\n\nЛицензия <code>{lic_key}</code> готова к активации на новом сервере."
+            else:
+                return
+        bot_obj = getattr(context, "bot", context)
+        await bot_obj.send_message(chat_id=user_id, text=msg, parse_mode="HTML")
+    except Exception as e:
+        import logging
+        logging.error(f"process_paid_reset error: {e}")
+
 
 async def deliver_bot_license_after_payment(context, user_id: int, tariff_name: str, days: int):
     import secrets, sqlite3
@@ -632,6 +653,31 @@ def start_sub_aggregator_server():
                         return
                 
                 if "/sub/" in self.path:
+                    # Проверка HWID и лимита устройств
+                    req_hwid = self.headers.get("x-hwid") or self.headers.get("X-HWID") or self.client_address[0]
+                    sub_id_req = self.path.split("/sub/")[-1].split("?")[0].strip("/")
+                    try:
+                        with sqlite3.connect(DB_PATH) as _c:
+                            _k = _c.execute("SELECT id, name FROM user_keys WHERE sub_id = ? AND is_active = 1", (sub_id_req,)).fetchone()
+                            if _k:
+                                _kid, _kname = _k
+                                _max_dev = 2 if ("2устро" in str(_kname).lower() or "2 устр" in str(_kname).lower()) else 1
+                                _known = [r[0] for r in _c.execute("SELECT hwid FROM key_devices WHERE key_id = ?", (_kid,)).fetchall()]
+                                if req_hwid not in _known:
+                                    if len(_known) >= _max_dev:
+                                        self.send_response(200)
+                                        self.send_header("Content-Type", "text/plain; charset=utf-8")
+                                        self.end_headers()
+                                        warn_node = "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?encryption=none&type=tcp#%E2%9B%94%20%D0%9B%D0%B8%D0%BC%D0%B8%D1%82%20%D1%83%D1%81%D1%82%D1%80%D0%BE%D0%B9%D1%81%D1%82%D0%B2%20%D0%B8%D1%81%D1%87%D0%B5%D1%80%D0%BF%D0%B0%D0%BD!%20%D0%A1%D0%B1%D1%80%D0%BE%D1%81%D1%8C%D1%82%D0%B5%20%D0%B2%20%D0%B1%D0%BE%D1%82%D0%B5%20(20%E2%82%BD)"
+                                        import base64
+                                        self.wfile.write(base64.b64encode(warn_node.encode("utf-8")))
+                                        return
+                                    else:
+                                        _c.execute("INSERT OR IGNORE INTO key_devices (key_id, sub_token, hwid, last_ip) VALUES (?, ?, ?, ?)", (_kid, sub_id_req, req_hwid, self.client_address[0]))
+                                        _c.commit()
+                    except Exception as _ex:
+                        pass
+
                     sub_id = self.path.split("/sub/")[-1].split("?")[0].strip("/")
                     with sqlite3.connect(DB_PATH) as conn:
                         row_k = conn.execute("SELECT config_text FROM user_keys WHERE sub_id = ? AND is_active = 1", (sub_id,)).fetchone()
@@ -1559,7 +1605,8 @@ async def render_single_key_control(user_id: int, key_id: int) -> tuple[str, Inl
             InlineKeyboardButton("✏️ Переименовать", callback_data=f"client_key_ren_{k_id}")
         ],
         [
-            InlineKeyboardButton("⏳ Продлить ключ", callback_data="order_vpn")
+            InlineKeyboardButton("⏳ Продлить ключ", callback_data="order_vpn"),
+            InlineKeyboardButton("📱 Сбросить устройства (20₽)", callback_data=f"reset_vpn_hwid_{k_id}")
         ],
         [
             InlineKeyboardButton("⬅️ Назад к моим ключам", callback_data="client_my_keys"),
@@ -3170,6 +3217,11 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(kb_rows)
         )
+        return
+
+    # Перехват кнопок платного сброса HWID (VPN и Бот)
+    if data.startswith("reset_vpn_hwid_") or data == "my_bot_licenses" or data.startswith("reset_bot_lic_"):
+        await handle_hwid_reset_callbacks(update, context)
         return
 
     if data == "order_bot":
@@ -5479,7 +5531,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info = get_user_info(user.id)
         bot_lic = info[9] if (info and info[9]) else ""
         lic_line = f"\n🔐 <b>Ваша активная лицензия:</b> <code>{html.escape(bot_lic)}</code>\n" if bot_lic else ""
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Тарифы и покупка Бота", callback_data="order_bot")]])
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 Тарифы и покупка Бота", callback_data="order_bot")],
+            [InlineKeyboardButton("🔑 Мои лицензии Бота", callback_data="my_bot_licenses")]
+        ])
         await msg.reply_text(
             "🤖 <b>Продажа и аренда защищенного бота (Bot_VIP)</b>\n"
             f"{lic_line}\n"
@@ -6970,3 +7025,76 @@ async def handle_new_subscription(user_id: int):
         
     response_text += "Скопируйте ссылки и импортируйте их в ваш VPN-клиент (v2rayNG, Streisand, Nekobox)."
     return response_text
+
+
+async def handle_hwid_reset_callbacks(update, context):
+    query = update.callback_query
+    data = query.data
+    user = update.effective_user
+    
+    if data.startswith("reset_vpn_hwid_"):
+        k_id = int(data.split("_")[-1])
+        price = 20
+        # Создаем инвойс на оплату сброса VPN (20 руб)
+        pay_buttons = []
+        for p_key, p_info in PAYMENT_PROVIDERS.items():
+            if get_setting(f"pay_{p_key}_enabled", "0") == "1":
+                pay_buttons.append([
+                    InlineKeyboardButton(f"💳 Оплатить {price} ₽ через {p_info['title']}", callback_data=f"pay_exec_{p_key}_vpnreset_{k_id}")
+                ])
+        if not pay_buttons:
+            pay_buttons.append([InlineKeyboardButton("💳 Оплатить через реквизиты", callback_data="manual_order_vpn")])
+        pay_buttons.append([InlineKeyboardButton("⬅️ Назад к ключу", callback_data=f"client_key_det_{k_id}")])
+        
+        await query.message.edit_text(
+            f"📱 <b>Сброс привязанных устройств для VPN-ключа #{k_id}</b>\n\n"
+            f"Стоимость сброса списка устройств: <b>{price} ₽</b>\n"
+            f"После оплаты все старые смартфоны и ПК будут отвязаны, и вы сможете подключить новые.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(pay_buttons)
+        )
+        await query.answer()
+        return
+
+    elif data == "my_bot_licenses":
+        with sqlite3.connect(DB_PATH) as conn:
+            licenses = conn.execute("SELECT lic_key, buyer_note, server_ip, expires_id, is_active FROM bot_licenses WHERE bound_admin_id = ?", (str(user.id),)).fetchall()
+        
+        if not licenses:
+            await query.answer("У вас пока нет купленных лицензий Bot_VIP.", show_alert=True)
+            return
+            
+        txt = "🔑 <b>Ваши приобретенные лицензии Bot_VIP:</b>\n\n"
+        kb_rows = []
+        for lic_key, note, s_ip, exp, active in licenses:
+            ip_str = s_ip if s_ip else "Не привязан к VPS"
+            txt += f"• <code>{lic_key}</code>\n  Статус: {'🟢 Активен' if active else '🔴 Отключен'}\n  VPS: {ip_str}\n\n"
+            kb_rows.append([InlineKeyboardButton(f"🔄 Сбросить привязку VPS для {lic_key[-8:]} (200₽)", callback_data=f"reset_bot_lic_{lic_key}")])
+            
+        kb_rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="order_bot")])
+        await query.message.edit_text(txt, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows))
+        await query.answer()
+        return
+
+    elif data.startswith("reset_bot_lic_"):
+        lic_key = data.replace("reset_bot_lic_", "")
+        price = 200
+        pay_buttons = []
+        for p_key, p_info in PAYMENT_PROVIDERS.items():
+            if get_setting(f"pay_{p_key}_enabled", "0") == "1":
+                pay_buttons.append([
+                    InlineKeyboardButton(f"💳 Оплатить {price} ₽ через {p_info['title']}", callback_data=f"pay_exec_{p_key}_botreset_{lic_key}")
+                ])
+        if not pay_buttons:
+            pay_buttons.append([InlineKeyboardButton("💳 Оплатить через реквизиты", callback_data="manual_order_bot")])
+        pay_buttons.append([InlineKeyboardButton("⬅️ Назад к лицензиям", callback_data="my_bot_licenses")])
+        
+        await query.message.edit_text(
+            f"🔄 <b>Сброс привязки сервера для лицензии {lic_key}</b>\n\n"
+            f"Стоимость отвязки от старого VPS: <b>{price} ₽</b>\n"
+            f"После оплаты лицензия будет отвязана от текущего железа, и вы сможете активировать её на новом сервере.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(pay_buttons)
+        )
+        await query.answer()
+        return

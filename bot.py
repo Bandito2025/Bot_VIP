@@ -5865,6 +5865,14 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
             "SELECT id, expires_at, is_active FROM user_keys WHERE user_id = ? ORDER BY id DESC",
             (uid,)
         ).fetchall()
+        dev_counts = dict(conn.execute(
+            "SELECT key_id, COUNT(id) FROM key_devices WHERE key_id IN (SELECT id FROM user_keys WHERE user_id = ?) GROUP BY key_id",
+            (uid,)
+        ).fetchall())
+        bot_lic_rows = conn.execute(
+            "SELECT id, lic_key, server_ip, server_hwid, is_active FROM bot_licenses WHERE bound_admin_id = ? OR bound_admin_id = ?",
+            (str(uid), uid)
+        ).fetchall()
 
     uname_str = f"@{html.escape(uname)}" if uname else "<i>_не указан_</i>"
     deliv_str = "<b>недоступен (блок)</b>" if bot_blk else "<b>доступен для сообщений</b>"
@@ -5896,8 +5904,9 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
 
     kb_rows = []
     for kid, _, _ in key_rows[:15]:
+        d_cnt = dev_counts.get(kid, 0) if "dev_counts" in locals() else 0
         kb_rows.append([InlineKeyboardButton(f"🔑 Ключ #{kid}", callback_data=f"ckm_kview_{kid}_{uid}")])
-
+        kb_rows.append([InlineKeyboardButton(f"📱 Сбросить HWID #{kid} ({d_cnt} дев.)", callback_data=f"ckm_rhwid_{kid}_{uid}")])
     kb_rows.append([InlineKeyboardButton("➕ Добавить ключ", callback_data=f"ckm_wgrp_{uid}")])
     kb_rows.append([InlineKeyboardButton("💬 Написать", callback_data=f"admin_uact_msg_{uid}")])
     kb_rows.append([
@@ -6676,6 +6685,44 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
             txt, kb = render_ckm_key_detail(kid, uid)
             await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
             raise ApplicationHandlerStop
+
+        if data.startswith("ckm_rhwid_"):
+            try:
+                parts = data.split("_")
+                kid, uid = int(parts[2]), int(parts[3])
+                with sqlite3.connect(DB_PATH) as conn:
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM key_devices WHERE key_id = ?", (kid,))
+                    del_cnt = cur.rowcount
+                    conn.commit()
+                alert_msg = f"✅ HWID сброшен для ключа #{kid}!\n(Удалено активных привязок: {del_cnt})"
+                await query.answer(alert_msg, show_alert=True)
+                try:
+                    txt, kb = render_single_user_dossier(uid)
+                    await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
+                except Exception:
+                    pass
+            except Exception as e:
+                await query.answer(f"Ошибка: {e}", show_alert=True)
+            return
+
+        if data.startswith("ckm_rbot_"):
+            try:
+                parts = data.split("_")
+                uid = int(parts[-1])
+                lic_key = parts[2]
+                with sqlite3.connect(DB_PATH) as conn:
+                    conn.execute("UPDATE bot_licenses SET server_hwid = NULL, server_ip = NULL WHERE lic_key = ?", (lic_key,))
+                    conn.commit()
+                await query.answer(f"✅ Лицензия {lic_key[-8:]} отвязана от сервера!", show_alert=True)
+                try:
+                    txt, kb = render_single_user_dossier(uid)
+                    await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
+                except Exception:
+                    pass
+            except Exception as e:
+                await query.answer(f"Ошибка: {e}", show_alert=True)
+            return
 
         if data.startswith("ckm_kdel_"):
             _, _, kid_s, uid_s = data.split("_")

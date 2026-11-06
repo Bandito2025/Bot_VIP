@@ -1,3 +1,4 @@
+from telegram.request import HTTPXRequest
 async def process_paid_reset(target_type: str, item_id: str, user_id: int, context):
     try:
         with sqlite3.connect(DB_PATH) as conn:
@@ -6986,7 +6987,7 @@ async def render_my_keys_screen(user_id: int) -> tuple[str, InlineKeyboardMarkup
 if __name__ == "__main__":
     init_db()
     verify_server_lock()
-    app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
+    app = ApplicationBuilder().token(TOKEN).request(HTTPXRequest(connection_pool_size=16, connect_timeout=20.0, read_timeout=30.0, write_timeout=20.0, pool_timeout=10.0)).post_init(post_init).build()
 
     if app.job_queue:
         app.job_queue.run_daily(daily_backup_job, time=time(hour=3, minute=0))

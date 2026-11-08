@@ -1,4 +1,28 @@
 from telegram.request import HTTPXRequest
+
+# --- AUTO MIGRATION: key_devices ---
+def _ensure_key_devices_table():
+    import sqlite3, glob
+    for db_file in glob.glob("*.db") + glob.glob("data/*.db"):
+        try:
+            with sqlite3.connect(db_file) as c:
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS key_devices (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        key_id INTEGER NOT NULL,
+                        hwid TEXT NOT NULL,
+                        device_name TEXT,
+                        ip TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                c.execute("CREATE INDEX IF NOT EXISTS idx_key_devices_key_id ON key_devices(key_id)")
+        except Exception:
+            pass
+_ensure_key_devices_table()
+# -----------------------------------
+
 async def process_paid_reset(target_type: str, item_id: str, user_id: int, context):
     try:
         with sqlite3.connect(DB_PATH) as conn:

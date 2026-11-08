@@ -1,3 +1,64 @@
+from telegram.request import HTTPXRequest
+async def process_paid_reset(target_type: str, item_id: str, user_id: int, context):
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            if target_type == "vpnreset":
+                k_id = int(item_id)
+                conn.execute("DELETE FROM key_devices WHERE key_id = ?", (k_id,))
+                conn.commit()
+                msg = f"✅ <b>Устройства успешно отвязаны!</b>\n\nСписок привязанных устройств для VPN-ключа #{k_id} полностью очищен. Теперь вы можете подключить новое устройство."
+            elif target_type == "botreset":
+                lic_key = str(item_id)
+                conn.execute("UPDATE bot_licenses SET server_hwid = NULL, server_ip = NULL WHERE lic_key = ?", (lic_key,))
+                conn.commit()
+                msg = f"✅ <b>Лицензия успешно отвязана от VPS!</b>\n\nЛицензия <code>{lic_key}</code> готова к активации на новом сервере."
+            else:
+                return
+        bot_obj = getattr(context, "bot", context)
+        await bot_obj.send_message(chat_id=user_id, text=msg, parse_mode="HTML")
+    except Exception as e:
+        import logging
+        logging.error(f"process_paid_reset error: {e}")
+
+
+async def deliver_bot_license_after_payment(context, user_id: int, tariff_name: str, days: int):
+    import secrets, sqlite3
+    lic_key = f"VIP-{secrets.token_hex(4).upper()}-{secrets.token_hex(4).upper()}"
+    days_label = "Бессрочно (LifeTime)" if days == 0 else f"{days} дней"
+    
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO bot_licenses (lic_key, buyer_note, bound_admin_id, is_active) VALUES (?, ?, ?, 1)",
+                (lic_key, f"Куплен {tariff_name} ({days_label})", str(user_id))
+            )
+            conn.commit()
+    except Exception as e:
+        import logging
+        logging.error(f"Ошибка сохранения купленной лицензии: {e}")
+
+    text_delivery = (
+        f"🎉 <b>Поздравляем с приобретением Bot_VIP!</b>\n\n"
+        f"🔑 <b>Ваш лицензионный ключ:</b>\n"
+        f"<code>{lic_key}</code>\n"
+        f"⏳ <b>Срок действия:</b> {days_label}\n\n"
+        f"📦 <b>Официальный репозиторий GitHub:</b>\n"
+        f"https://github.com/Bandito2025/Bot_VIP\n\n"
+        f"⚡ <b>Команда быстрой установки в 1 клик (Ubuntu 22.04/24.04):</b>\n"
+        f"<code>curl -sSL https://raw.githubusercontent.com/Bandito2025/Bot_VIP/main/install.sh | bash</code>\n\n"
+        f"📖 <b>Краткая инструкция по запуску:</b>\n"
+        f"1. Арендуйте чистый VPS/сервер с Ubuntu 22.04 или 24.04.\n"
+        f"2. Подключитесь по SSH и вставьте команду установки выше.\n"
+        f"3. Укажите токен от @BotFather и ваш Telegram ID администратора.\n"
+        f"4. В панели бота вставьте выданный выше лицензионный ключ."
+    )
+    try:
+        await context.bot.send_message(chat_id=user_id, text=text_delivery, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        import logging
+        logging.error(f"Не удалось доставить лицензию пользователю {user_id}: {e}")
+
+
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 import asyncio
 
@@ -21,7 +82,24 @@ import base64
 import socket
 import secrets
 import hashlib
+# --- SQLite AutoClose Context Fix ---
 import sqlite3
+_orig_sqlite_connect = sqlite3.connect
+
+class _AutoCloseConn(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return super().__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self.close()
+
+def _safe_sqlite_connect(*args, **kwargs):
+    if "factory" not in kwargs:
+        kwargs["factory"] = _AutoCloseConn
+    return _orig_sqlite_connect(*args, **kwargs)
+
+sqlite3.connect = _safe_sqlite_connect
+# ------------------------------------
 import logging
 import threading
 import importlib.util
@@ -395,11 +473,11 @@ def init_db():
         t_cnt = conn.execute("SELECT COUNT(*) FROM tariffs").fetchone()[0]
         if t_cnt == 0:
             default_tariffs = [
-                ("Единая подписка (3x-ui + Proxy)", "🔥 1 месяц (Все локации)", 30, 199, 100),
-                ("Единая подписка (3x-ui + Proxy)", "💎 3 месяца (Выгодно)", 90, 499, 250),
-                ("Единая подписка (3x-ui + Proxy)", "🚀 6 месяцев", 180, 899, 450),
-                ("Единая подписка (3x-ui + Proxy)", "👑 1 год (VIP Максимум)", 365, 1490, 750),
-                ("Единая подписка (3x-ui + Proxy)", "♾ Безлимит (Без срока)", 0, 2990, 1500),
+                ("Единая подписка (VIP VPN)", "🔥 1 месяц (Все локации)", 30, 199, 100),
+                ("Единая подписка (VIP VPN)", "💎 3 месяца (Выгодно)", 90, 499, 250),
+                ("Единая подписка (VIP VPN)", "🚀 6 месяцев", 180, 899, 450),
+                ("Единая подписка (VIP VPN)", "👑 1 год (VIP Максимум)", 365, 1490, 750),
+                ("Единая подписка (VIP VPN)", "♾ Безлимит (Без срока)", 0, 2990, 1500),
                 ("Лицензия Бота", "🤖 Аренда Бота (1 мес)", 30, 1500, 750),
                 ("Лицензия Бота", "🤖 Полная лицензия Бота (1 год)", 365, 5900, 2900),
             ]
@@ -436,8 +514,8 @@ def init_db():
         "ext_load_enabled": "0",
         "ext_core_edit_allowed": "0",
         "require_channel_sub": "0",
-        "text_welcome": "Добро пожаловать в <b>Bot_VIP</b>!\n\n🔑 Управляйте своими ключами в разделе <b>«🔑 Мои ключи»</b> или подключите новую подписку (<b>3x-ui + Web Panel Proxy 2.7.0</b>).",
-        "text_about": "🤖 <b>Bot_VIP</b> — единая система подключения 3x-ui + Web Panel Proxy 2.7.0 и продажи защищенных Telegram-ботов.",
+        "text_welcome": "Добро пожаловать в <b>Bot_VIP</b>!\n\n🔑 Управляйте своими ключами в разделе <b>«🔑 Мои ключи»</b> или подключите новую подписку (<b>VIP VPN</b>).",
+        "text_about": "🤖 <b>Bot_VIP</b> — единая система подключения VIP VPN и продажи защищенных Telegram-ботов.",
         "text_support": "✉️ <b>Напишите ваш вопрос одним сообщением:</b>\nОн будет сразу передан администратору, и вы получите ответ прямо в этом чате."
     }
     for d_key, d_val in defaults.items():
@@ -576,6 +654,31 @@ def start_sub_aggregator_server():
                         return
                 
                 if "/sub/" in self.path:
+                    # Проверка HWID и лимита устройств
+                    req_hwid = self.headers.get("x-hwid") or self.headers.get("X-HWID") or self.client_address[0]
+                    sub_id_req = self.path.split("/sub/")[-1].split("?")[0].strip("/")
+                    try:
+                        with sqlite3.connect(DB_PATH) as _c:
+                            _k = _c.execute("SELECT id, name FROM user_keys WHERE sub_id = ? AND is_active = 1", (sub_id_req,)).fetchone()
+                            if _k:
+                                _kid, _kname = _k
+                                _max_dev = 2 if ("2устро" in str(_kname).lower() or "2 устр" in str(_kname).lower()) else 1
+                                _known = [r[0] for r in _c.execute("SELECT hwid FROM key_devices WHERE key_id = ?", (_kid,)).fetchall()]
+                                if req_hwid not in _known:
+                                    if len(_known) >= _max_dev:
+                                        self.send_response(200)
+                                        self.send_header("Content-Type", "text/plain; charset=utf-8")
+                                        self.end_headers()
+                                        warn_node = "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?encryption=none&type=tcp#%E2%9B%94%20%D0%9B%D0%B8%D0%BC%D0%B8%D1%82%20%D1%83%D1%81%D1%82%D1%80%D0%BE%D0%B9%D1%81%D1%82%D0%B2%20%D0%B8%D1%81%D1%87%D0%B5%D1%80%D0%BF%D0%B0%D0%BD!%20%D0%A1%D0%B1%D1%80%D0%BE%D1%81%D1%8C%D1%82%D0%B5%20%D0%B2%20%D0%B1%D0%BE%D1%82%D0%B5%20(20%E2%82%BD)"
+                                        import base64
+                                        self.wfile.write(base64.b64encode(warn_node.encode("utf-8")))
+                                        return
+                                    else:
+                                        _c.execute("INSERT OR IGNORE INTO key_devices (key_id, sub_token, hwid, last_ip) VALUES (?, ?, ?, ?)", (_kid, sub_id_req, req_hwid, self.client_address[0]))
+                                        _c.commit()
+                    except Exception as _ex:
+                        pass
+
                     sub_id = self.path.split("/sub/")[-1].split("?")[0].strip("/")
                     with sqlite3.connect(DB_PATH) as conn:
                         row_k = conn.execute("SELECT config_text FROM user_keys WHERE sub_id = ? AND is_active = 1", (sub_id,)).fetchone()
@@ -755,7 +858,7 @@ def render_extensions_diagnostics_screen(application=None) -> tuple[str, InlineK
     return text, InlineKeyboardMarkup(buttons)
 
 # ==============================================================================
-# 🌐 ДВИЖОК ИНТЕГРАЦИИ: 3X-UI API + WEB PANEL PROXY 2.7.0
+# 🌐 ДВИЖОК ИНТЕГРАЦИИ: VIP PROXY
 # ==============================================================================
 async def poll_node_live_status(srv_row) -> dict:
     srv = srv_row
@@ -884,7 +987,7 @@ def generate_3xui_link(inb: dict, client_uuid: str, host: str, country_flag: str
     """Генерация ссылки конфигурации из параметров инбаунда 3X-UI"""
     proto = inb.get("protocol", "vless").lower()
     port = inb.get("port")
-    remark = inb.get("remark") or f"3X-UI {proto.upper()}"
+    remark = inb.get("remark") or f"VIP {proto.upper()}"
     if not remark.startswith(country_flag):
         remark = f"{country_flag} {remark}"
         
@@ -1009,7 +1112,7 @@ async def provision_client_on_3xui(server, tg_id: int, client_uuid: str, sub_id:
                     "enable": True,
                     "tgId": safe_tg_id,
                     "subId": str(sub_id),
-                    "limitIp": 0,
+                    "limitIp": 1,
                     "totalGB": 0,
                     "expiryTime": safe_expiry,
                     "flow": ""
@@ -1425,7 +1528,7 @@ async def _old_unused_my_keys(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
         return (
             "🔑 <b>Мои ключи</b>\n\n"
             "У вас пока нет активных ключей.\n"
-            "Нажмите кнопку ниже, чтобы подключить единую подписку (3x-ui + Web Panel Proxy 2.7.0):",
+            "Нажмите кнопку ниже, чтобы подключить единую подписку (VIP VPN):",
             InlineKeyboardMarkup(kb_rows)
         )
 
@@ -1487,7 +1590,7 @@ async def render_single_key_control(user_id: int, key_id: int) -> tuple[str, Inl
         f"📊 <b>Трафик:</b> {tr_str} ({lim_str})\n"
         f"📱 <b>Лимит устройств:</b> {html.escape(dev_lim)}\n"
         f"⏳ <b>Срок действия:</b> до <code>{html.escape(exp_display)}</code>\n\n"
-        f"🔗 <b>Единая ссылка подписки (3x-ui + Proxy 2.7.0):</b>\n"
+        f"🔗 <b>Единая ссылка подписки (VIP VPN):</b>\n"
         f"<code>{html.escape(sub_url)}</code>\n\n"
         f"🔐 <b>Конфигурация ключа:</b>\n"
         f"<pre>{html.escape(cfg_txt)}</pre>"
@@ -1503,7 +1606,8 @@ async def render_single_key_control(user_id: int, key_id: int) -> tuple[str, Inl
             InlineKeyboardButton("✏️ Переименовать", callback_data=f"client_key_ren_{k_id}")
         ],
         [
-            InlineKeyboardButton("⏳ Продлить ключ", callback_data="order_vpn")
+            InlineKeyboardButton("⏳ Продлить ключ", callback_data="order_vpn"),
+            InlineKeyboardButton("📱 Сбросить устройства (20₽)", callback_data=f"reset_vpn_hwid_{k_id}")
         ],
         [
             InlineKeyboardButton("⬅️ Назад к моим ключам", callback_data="client_my_keys"),
@@ -1776,10 +1880,21 @@ def _old_unused_dossier(target_id: int) -> tuple[str, InlineKeyboardMarkup]:
 # ==============================================================================
 # 💳 ДВИЖОК ОПЛАТ И ТАРИФОВ
 # ==============================================================================
-def get_active_tariffs():
-    with sqlite3.connect(DB_PATH) as conn:
-        cur = conn.execute("SELECT id, group_name, name, days, price_rub, price_stars FROM tariffs WHERE is_active = 1 ORDER BY price_rub ASC")
-        return cur.fetchall()
+def get_active_tariffs(for_bot: bool = False):
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            target = 1 if for_bot else 0
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(tariffs)").fetchall()]
+            stars_col = "price_stars" if "price_stars" in cols else "0"
+            act_cond = "AND is_active = 1" if "is_active" in cols else ""
+            grp_val = "'Лицензия Бота'" if for_bot else "'VPN'"
+            sql = f"SELECT id, {grp_val}, name, days, price_rub, {stars_col} FROM tariffs WHERE is_bot = {target} {act_cond} ORDER BY price_rub ASC"
+            return conn.execute(sql).fetchall()
+    except Exception as e:
+        import logging
+        logging.error(f"get_active_tariffs error: {e}")
+        return []
+
 
 def get_tariff_by_id(t_id: int):
     with sqlite3.connect(DB_PATH) as conn:
@@ -2158,7 +2273,7 @@ async def redeem_tariff_key_async(user_id: int, key_code: str):
         else:
             k_id, new_until, sub_url, _ = await create_or_extend_user_key(user_id, days=days, create_new=True)
             return True, (
-                f"🔑 <b>Ключ #{k_id} (3x-ui + Web Panel Proxy 2.7.0) успешно активирован!</b>\n"
+                f"🔑 <b>Ключ #{k_id} (VIP VPN) успешно активирован!</b>\n"
                 f"📅 Действует до: <code>{new_until}</code>\n\n"
                 f"🔗 <b>Единая ссылка подписки:</b>\n"
                 f"<code>{html.escape(sub_url)}</code>\n\n"
@@ -2209,7 +2324,7 @@ def main_keyboard(user_id: int):
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 
-def build_admin_dashboard_text(mon_status: str = "✅ Активен (3x-ui + Proxy 2.7.0)") -> str:
+def build_admin_dashboard_text(mon_status: str = "✅ Активен (VIP VPN)") -> str:
     m = get_dashboard_metrics()
     return (
         ("⚙️ <b>Админ-панель</b>\n💎 <b>Лицензия:</b> <code>PRO Edition</code>\n\n" if staff_roles.is_pro_edition(get_setting) else "⚙️ <b>Админ-панель</b>\n🔒 <b>Лицензия:</b> <code>FREE Edition (Урезанная)</code>\n\n") +
@@ -2271,7 +2386,7 @@ async def render_servers_monitor_screen():
     if not servers:
         lines.append(
             "<i>Сервера еще не добавлены.\n"
-            "Нажмите «➕ Добавить сервер», чтобы подключить панель 3x-ui и Web Panel Proxy 2.7.0.</i>"
+            "Нажмите «➕ Добавить сервер», чтобы подключить панель серверы VPN.</i>"
         )
     else:
         for srv in servers:
@@ -2285,7 +2400,7 @@ async def render_servers_monitor_screen():
                 )
             elif st["online"]:
                 dot = "🟢"
-                p_badge = "3x-ui + Proxy 2.7" if p_type == "both" else p_type
+                p_badge = "VIP VPN 2.7" if p_type == "both" else p_type
                 lines.append(
                     f"{dot} <b>{html.escape(name)}</b> (<code>{html.escape(host)}</code>)\n"
                     f"Панель: онлайн | 🔑 {st.get('clients_online', 0)} онлайн | 📊 {st.get('traffic_str', '0 GB')} | 💻 {st.get('cpu_str', '0%')}\n"
@@ -2439,50 +2554,10 @@ async def poll_pending_invoices_job(context: ContextTypes.DEFAULT_TYPE):
                     conn.commit()
 
                 if is_lic:
-                    now = datetime.now()
-                    lic_token = f"LIC-BOT-{user_id}-{secrets.token_hex(3).upper()} (до {(now + timedelta(days=days)).strftime('%Y-%m-%d')})"
-                    with sqlite3.connect(DB_PATH) as conn:
-                        conn.execute("UPDATE users SET is_vip = 1, bot_license = ? WHERE user_id = ?", (lic_token, user_id))
-                        conn.commit()
                     try:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=f"🎉 <b>Оплата прошла успешно!</b> Лицензия Бота активирована на {days} дн.\n\n🔐 Токен лицензии: <code>{lic_token}</code>",
-                            parse_mode="HTML",
-                            protect_content=True
-                        )
+                        await deliver_bot_license_after_payment(context, user_id, tariff_name, days)
                     except Exception as ex_u:
                         logger.warning(f"Send bot lic err: {ex_u}")
-                else:
-                    try:
-                        k_id, until, sub_url, _ = await create_or_extend_user_key(user_id, days=days, create_new=True)
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"🎉 <b>Оплата получена!</b> Создан Ключ #{k_id} (до {until})\n\n"
-                                f"🔗 <b>Единая ссылка подписки:</b>\n<code>{html.escape(sub_url)}</code>\n\n"
-                                f"Все ваши ключи доступны в разделе «🔑 Мои ключи»."
-                            ),
-                            parse_mode="HTML",
-                            protect_content=True
-                        )
-                    except Exception as ex_k:
-                        logger.error(f"Key issue error: {ex_k}")
-
-                if get_setting("pay_notify_enabled", "1") == "1":
-                    try:
-                        await context.bot.send_message(
-                            chat_id=ADMIN_ID,
-                            text=(
-                                f"💰 <b>НОВАЯ АВТОМАТИЧЕСКАЯ ОПЛАТА ({provider.upper()})</b>\n\n"
-                                f"👤 Клиент: ID <code>{user_id}</code>\n"
-                                f"📋 Тариф: {html.escape(tariff_name)} ({days} дн.)\n"
-                                f"💵 Сумма: {price} ₽"
-                            ),
-                            parse_mode="HTML"
-                        )
-                    except Exception as ex_a:
-                        logger.warning(f"Admin notify err: {ex_a}")
     except Exception as e:
         logger.error(f"poll_pending_invoices_job error: {e}")
 
@@ -2503,7 +2578,7 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
         t_row = get_tariff_by_id(t_id)
         if t_row:
             _, grp, tariff_name, days, pr_rub, _ = t_row
-            if "Бота" in grp:
+            if any(x in str(grp).lower() or x in str(tariff_name).lower() for x in ("бот", "лицензия")):
                 is_bot_lic = True
 
     display_rub = total_amount if currency == "XTR" else (total_amount / 100.0)
@@ -2514,17 +2589,13 @@ async def successful_payment_callback(update: Update, context: ContextTypes.DEFA
         conn.commit()
 
     if is_bot_lic:
-        now = datetime.now()
-        lic_token = f"LIC-BOT-{user.id}-{secrets.token_hex(3).upper()} (до {(now + timedelta(days=days)).strftime('%Y-%m-%d')})"
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("UPDATE users SET is_vip = 1, bot_license = ? WHERE user_id = ?", (lic_token, user.id))
-            conn.commit()
-        await update.message.reply_text(
-            f"🎉 <b>Оплата прошла успешно! Лицензия Бота активирована на {days} дн.</b>\n\n"
-            f"🔐 Токен лицензии: <code>{lic_token}</code>",
-            parse_mode="HTML",
-            protect_content=True
-        )
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (user.id,))
+                conn.commit()
+            await deliver_bot_license_after_payment(context, user.id, tariff_name, days)
+        except Exception as ex_u:
+            logger.error(f"Deliver bot license error (stars): {ex_u}")
     else:
         k_id, until, sub_url, _ = await create_or_extend_user_key(user.id, days=days, create_new=True)
         await update.message.reply_text(
@@ -2592,7 +2663,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     custom_welcome = get_setting(
         "text_welcome",
-        "Добро пожаловать в <b>Bot_VIP</b>!\n\n🔑 Управляйте своими ключами в разделе <b>«🔑 Мои ключи»</b> или подключите новую подписку (<b>3x-ui + Web Panel Proxy 2.7.0</b>)."
+        "Добро пожаловать в <b>Bot_VIP</b>!\n\n🔑 Управляйте своими ключами в разделе <b>«🔑 Мои ключи»</b> или подключите новую подписку (<b>VIP VPN</b>)."
     )
     await update.message.reply_text(
         f"Привет, <b>{html.escape(user.first_name)}</b>! {custom_welcome}",
@@ -2657,14 +2728,29 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 👥 ИНТЕРФЕЙС "ПОЛЬЗОВАТЕЛИ" С ФИЛЬТРАМИ, РАДИОКНОПКАМИ И ПАГИНАЦИЕЙ
 # ==============================================================================
 def render_admin_main_screen():
-    text = """👑 <b>Панель управления Bot_VIP</b>
-
-Выберите нужный раздел:"""
+    if "build_admin_dashboard_text" in globals():
+        text = build_admin_dashboard_text()
+    else:
+        text = "⚙️ <b>Админ-панель</b>"
     try:
         kb = admin_dashboard_keyboard()
+        if kb and hasattr(kb, "inline_keyboard"):
+            kb_rows = [list(row) for row in kb.inline_keyboard if not any(getattr(b, "callback_data", "") in ("admin_back_main", "start_back_main") for b in row)]
+            
+            is_pro = staff_roles.is_pro_edition(get_setting)
+            trial_used = get_setting("pro_trial_used", "0") == "1"
+            if not is_pro and not trial_used:
+                kb_rows.append([InlineKeyboardButton("🎁 Пробник PRO на 7 дней 💎", callback_data="admin_pro_trial_info")])
+            elif not is_pro and trial_used:
+                kb_rows.append([InlineKeyboardButton("🔒 PRO доступ (Купить) 💎", callback_data="lic_admin_menu")])
+
+            kb_rows.append([InlineKeyboardButton("✏️ Редактирование текстов и баннеров", callback_data="cms_open_menu")])
+            kb_rows.append([InlineKeyboardButton("🔐 Лицензии на бота (Продажи)", callback_data="lic_admin_menu")])
+            kb_rows.append([InlineKeyboardButton("🈴 На главную", callback_data="start_back_main")])
+            kb = InlineKeyboardMarkup(kb_rows)
     except Exception as e:
         import logging
-        logging.error(f"Ошибка вызова admin_dashboard_keyboard: {e}")
+        logging.error(f"Ошибка сборки клавиатуры в render_admin_main_screen: {e}")
         kb = None
     return text, kb
 
@@ -3116,7 +3202,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disc_pct = info[19] if (info and len(info) > 19) else 0
         disc_line = f"\n🎫 <b>Активен купон на скидку: -{disc_pct}%!</b>\n" if disc_pct > 0 else ""
 
-        tariffs = [t for t in get_active_tariffs() if "Бота" not in t[1]]
+        tariffs = get_active_tariffs(for_bot=False)
         kb_rows = []
         for t_id, grp, name, days, pr_rub, pr_stars in tariffs:
             final_rub = max(1, int(pr_rub * (100 - disc_pct) / 100)) if disc_pct > 0 else pr_rub
@@ -3127,16 +3213,21 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb_rows.append([InlineKeyboardButton("✍️ Оставить заявку вручную", callback_data="manual_order_vpn")])
         kb_rows.append([InlineKeyboardButton("🔑 Мои ключи", callback_data="client_my_keys")])
         await query.message.reply_text(
-            f"📋 <b>Выберите тариф единой подписки (3x-ui + Web Panel Proxy 2.7.0):</b>{disc_line}\n"
+            f"📋 <b>Выберите тариф единой подписки (VIP VPN):</b>{disc_line}\n"
             f"После оплаты новый ключ мгновенно появится в разделе <b>«🔑 Мои ключи»</b>:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(kb_rows)
         )
         return
 
+    # Перехват кнопок платного сброса HWID (VPN и Бот)
+    if data.startswith("reset_vpn_hwid_") or data == "my_bot_licenses" or data.startswith("reset_bot_lic_"):
+        await handle_hwid_reset_callbacks(update, context)
+        return
+
     if data == "order_bot":
         await notify_admin_event(user, "notify_menu", "🔘 Открытие тарифов Бота", "Выбор тарифа Бота", context)
-        tariffs = [t for t in get_active_tariffs() if "Бота" in t[1]]
+        tariffs = get_active_tariffs(for_bot=True)
         kb_rows = []
         for t_id, grp, name, days, pr_rub, pr_stars in tariffs:
             kb_rows.append([
@@ -3212,6 +3303,26 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with sqlite3.connect(DB_PATH) as conn:
                 conn.execute("UPDATE users SET active_discount_pct = 0 WHERE user_id = ?", (user.id,))
                 conn.commit()
+            # Если это покупка лицензии бота — выдаем лицензию, а не VPN
+            is_bot_order = False
+            try:
+                with sqlite3.connect(DB_PATH) as _c:
+                    _row = _c.execute('SELECT is_bot, name FROM tariffs WHERE id = ?', (t_id,)).fetchone()
+                    if _row and (_row[0] == 1 or any(x in str(_row[1]).lower() for x in ('бот', 'безлимит', 'lifetime'))):
+                        is_bot_order = True
+            except Exception:
+                if any(x in str(name).lower() for x in ('бот', 'безлимит', 'lifetime')):
+                    is_bot_order = True
+
+            if is_bot_order:
+                await query.answer('Выдаем лицензию Бота...', show_alert=False)
+                try:
+                    await query.edit_message_text('⏳ <b>Генерируем лицензионный ключ и готовим комплект развертывания...</b>', parse_mode='HTML')
+                except Exception:
+                    pass
+                await deliver_bot_license_after_payment(context, user.id, name, days)
+                return
+
             await query.answer("⏳ Создаем ключ и настраиваем ноды...", show_alert=False)
             try:
                 await query.edit_message_text("⏳ *Пожалуйста, подождите...*\n\nРегистрируем конфигурацию на сервере...", parse_mode="Markdown")
@@ -3270,7 +3381,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_invoice(
                     chat_id=user.id,
                     title=name,
-                    description=f"{grp} (3x-ui + Web Panel Proxy 2.7.0)",
+                    description=f"{grp} (VIP VPN)",
                     payload=f"tariff_{t_id}_{user.id}",
                     provider_token="",
                     currency="XTR",
@@ -3310,7 +3421,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not yoo_shop or not yoo_sec or "example" in yoo_sec:
                 await query.answer("⚠️ ЮKassa временно не настроена администратором.", show_alert=True)
                 return
-            is_lic = 1 if "Бота" in grp else 0
+            is_lic = 1 if any(x in str(grp).lower() or x in str(tariff_name).lower() for x in ("бот", "лицензия")) else 0
             ret_url = f"https://t.me/{(await context.bot.get_me()).username}"
             pay_url, inv_id = await autopay.create_yookassa_payment(
                 shop_id=yoo_shop,
@@ -3344,7 +3455,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not cp_token:
                 await query.answer("⚠️ Crypto Pay временно не настроен администратором.", show_alert=True)
                 return
-            is_lic = 1 if "Бота" in grp else 0
+            is_lic = 1 if any(x in str(grp).lower() or x in str(tariff_name).lower() for x in ("бот", "лицензия")) else 0
             pay_url, inv_id = await autopay.create_cryptopay_payment(
                 token=cp_token,
                 amount_usdt=usdt_amount,
@@ -3395,6 +3506,84 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_role == "user":
         await notify_admin_event(user, "notify_security", "🚨 Попытка нажать админ-кнопку", data, context)
         await query.edit_message_text("⛔ Доступ запрещён.")
+        return
+
+    
+    if data == "admin_pro_trial_info":
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        ch_url = get_setting("channel_url", "").strip() or "https://t.me/"
+        trial_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Подписаться на новостной канал", url=ch_url)],
+            [InlineKeyboardButton("🤖 Подписаться на бота @SVOII_VPN_bot", url="https://t.me/SVOII_VPN_bot")],
+            [InlineKeyboardButton("✅ Я подписался (Активировать PRO на 7 дней)", callback_data="admin_pro_trial_act")],
+            [InlineKeyboardButton("⬅️ Назад в админ-панель", callback_data="admin_back_main")]
+        ])
+        trial_text = (
+            "🎁 <b>Активация пробного PRO-доступа на 7 дней 💎</b>\n\n"
+            "Получите полный доступ ко всем PRO-функциям бота:\n"
+            "• Управление персоналом (Администраторы и Модераторы)\n"
+            "• Маркетинг, рассылки и промокоды\n"
+            "• Расширенная аналитика и уведомления\n\n"
+            "<b>Условие активации:</b>\n"
+            "1. Подпишитесь на наш официальный новостной канал\n"
+            "2. Нажмите кнопку подтверждения ниже\n\n"
+            "<i>(Пробный период выдается 1 раз на 7 дней)</i>"
+        )
+        await query.edit_message_text(trial_text, parse_mode="HTML", reply_markup=trial_kb, disable_web_page_preview=True)
+        return
+
+    if data == "admin_pro_trial_act":
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        if get_setting("pro_trial_used", "0") == "1":
+            await query.edit_message_text(
+                "⚠️ <b>Пробный период уже был использован!</b>\n\nВы можете приобрести постоянную лицензию в разделе «Лицензии».",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ В админ-панель", callback_data="admin_back_main")]])
+            )
+            return
+
+        ch_id = get_setting("channel_id", "").strip() or get_setting("channel_url", "").strip()
+        is_sub = True
+        if ch_id:
+            try:
+                target_chat = ch_id if ch_id.startswith("-100") or ch_id.startswith("@") else f"@{ch_id.split("/")[-1]}"
+                m = await context.bot.get_chat_member(chat_id=target_chat, user_id=user.id)
+                if m.status not in ("member", "administrator", "creator"):
+                    is_sub = False
+            except Exception:
+                is_sub = True
+
+        if not is_sub:
+            await query.edit_message_text(
+                "❌ <b>Вы не подписаны на новостной канал!</b>\n\nПожалуйста, подпишитесь на канал и повторите попытку.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📢 Перейти в канал", url=get_setting("channel_url", "https://t.me/"))],
+                    [InlineKeyboardButton("🔄 Проверить снова", callback_data="admin_pro_trial_act")],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back_main")]
+                ])
+            )
+            return
+
+        from datetime import datetime, timedelta
+        trial_until = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        set_setting("bot_edition_tier", "pro")
+        set_setting("pro_trial_until", trial_until)
+        set_setting("pro_trial_used", "1")
+
+        await query.edit_message_text(
+            f"🎉 <b>PRO-версия успешно активирована на 7 дней! 💎</b>\n\n"
+            f"📅 Активна до: <code>{trial_until}</code>\n"
+            f"Все закрытые PRO-разделы теперь доступны.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Перейти в админ-панель", callback_data="admin_back_main")]])
+        )
         return
 
     if await staff_roles.handle_staff_callback(query, context, DB_PATH, ADMIN_ID, get_setting, set_setting):
@@ -3478,7 +3667,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"📋 <b>Подробности диагностики расширений</b>\n\n"
             f"📂 <b>Путь:</b> <code>{html.escape(EXTENSIONS_DIR)}</code>\n"
-            f"🔗 <b>Шлюз Web Panel Proxy 2.7.0 / Sub URL:</b>\n<code>{html.escape(sub_dom)}</code>\n\n"
+            f"🔗 <b>Шлюз VIP Proxy / Sub URL:</b>\n<code>{html.escape(sub_dom)}</code>\n\n"
             f"<b>Список файлов и модулей:</b>\n{details_list}",
             parse_mode="HTML",
             reply_markup=kb
@@ -3563,7 +3752,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"🌐 <b>Настройки Веб и Telegram Mini App</b>\n\n"
             f"📱 <b>URL Mini App кабинета:</b> <code>{html.escape(w_url)}</code>\n"
-            f"🔗 <b>Домен единой подписки (3x-ui + Proxy):</b>\n<code>{html.escape(s_dom)}</code>\n"
+            f"🔗 <b>Домен единой подписки (VIP VPN):</b>\n<code>{html.escape(s_dom)}</code>\n"
             f"🖧 <b>Локальный порт Sub-Aggregator:</b> <code>{SUB_PORT}</code>",
             parse_mode="HTML",
             reply_markup=kb
@@ -4037,6 +4226,86 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
             return
 
+        if act == "role":
+            try:
+                await query.answer()
+            except Exception:
+                pass
+            if not staff_roles.is_pro_edition(get_setting):
+                txt, kb = staff_roles.render_pro_locked_screen("Персонал")
+                clean_rows = [list(r) for r in kb.inline_keyboard if r]
+                clean_rows.append([InlineKeyboardButton("⬅️ Назад в досье", callback_data=f"admin_uact_backdos_{target_id}")])
+                await query.edit_message_text(txt, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(clean_rows))
+                return
+
+            cur_m = staff_roles.get_staff_member(DB_PATH, target_id)
+            cur_role = "Обычный клиент"
+            if cur_m:
+                cur_role = "Администратор" if cur_m.get("role") == "admin" else "Модератор"
+
+            role_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👑 Назначить Администратором 💎", callback_data=f"admin_uact_setadm_{target_id}")],
+                [InlineKeyboardButton("🛡 Назначить Модератором 💎", callback_data=f"admin_uact_setmod_{target_id}")],
+                [InlineKeyboardButton("❌ Снять права (Обычный клиент)", callback_data=f"admin_uact_delstaff_{target_id}")],
+                [InlineKeyboardButton("⬅️ Назад в досье", callback_data=f"admin_uact_backdos_{target_id}")]
+            ])
+            await query.edit_message_text(
+                f"👥 <b>Управление персоналом 💎</b>\n\n"
+                f"👤 Telegram ID: <code>{target_id}</code>\n"
+                f"🔰 Текущий статус: <b>{cur_role}</b>\n\n"
+                f"Выберите необходимую роль:",
+                parse_mode="HTML",
+                reply_markup=role_kb
+            )
+            return
+
+        if act == "setadm":
+            try:
+                await query.answer()
+            except Exception:
+                pass
+            if not staff_roles.is_pro_edition(get_setting):
+                txt, kb = staff_roles.render_pro_locked_screen("Персонал")
+                await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
+                return
+            ok, msg = staff_roles.add_staff_member(DB_PATH, target_id, "admin")
+            text_out, kb_out = render_single_user_dossier(target_id)
+            await query.edit_message_text(f"{msg}\n\n{text_out}", parse_mode="HTML", reply_markup=kb_out)
+            return
+
+        if act == "setmod":
+            try:
+                await query.answer()
+            except Exception:
+                pass
+            if not staff_roles.is_pro_edition(get_setting):
+                txt, kb = staff_roles.render_pro_locked_screen("Персонал")
+                await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
+                return
+            ok, msg = staff_roles.add_staff_member(DB_PATH, target_id, "moderator")
+            text_out, kb_out = render_single_user_dossier(target_id)
+            await query.edit_message_text(f"{msg}\n\n{text_out}", parse_mode="HTML", reply_markup=kb_out)
+            return
+
+        if act == "delstaff":
+            try:
+                await query.answer()
+            except Exception:
+                pass
+            staff_roles.remove_staff_member(DB_PATH, target_id)
+            text_out, kb_out = render_single_user_dossier(target_id)
+            await query.edit_message_text(f"✅ Права персонала сняты.\n\n{text_out}", parse_mode="HTML", reply_markup=kb_out)
+            return
+
+        if act == "backdos":
+            try:
+                await query.answer()
+            except Exception:
+                pass
+            text_out, kb_out = render_single_user_dossier(target_id)
+            await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+            return
+
         if act == "msg":
             context.user_data["mode"] = "direct_msg_user"
             context.user_data["target_user_id"] = target_id
@@ -4063,7 +4332,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if data == "admin_usync_push":
-        await query.edit_message_text("⏳ <b>Выгрузка активных пользователей из БД во все панели 3x-ui...</b>", parse_mode="HTML")
+        await query.edit_message_text("⏳ <b>Выгрузка активных пользователей из БД во все серверы VPN...</b>", parse_mode="HTML")
         u_cnt, s_cnt = await sync_db_to_panels()
         text_out, kb_out = render_users_admin_screen()
         await query.edit_message_text(
@@ -4074,7 +4343,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "admin_usync_pull":
-        await query.edit_message_text("⏳ <b>Загрузка клиентов из панелей 3x-ui в БД бота...</b>", parse_mode="HTML")
+        await query.edit_message_text("⏳ <b>Загрузка клиентов из серверов VPN в БД бота...</b>", parse_mode="HTML")
         imp_cnt = await sync_panels_to_db()
         text_out, kb_out = render_users_admin_screen()
         await query.edit_message_text(
@@ -4242,7 +4511,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Отправьте параметры тарифа через вертикальную черту <code>|</code>:\n"
             "<code>Группа | Название тарифа | Дней (0 = Без срока) | Цена в рублях</code>\n\n"
             "<b>Пример:</b>\n"
-            "<code>Единая подписка (3x-ui + Proxy) | 🔥 2 месяца | 60 | 349</code>",
+            "<code>Единая подписка (VIP VPN) | 🔥 2 месяца | 60 | 349</code>",
             parse_mode="HTML"
         )
         return
@@ -4379,7 +4648,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "admin_srv_add_legacy":
         context.user_data["mode"] = "add_server"
         await query.edit_message_text(
-            "➕ <b>Добавление сервера (3x-ui + Web Panel Proxy 2.7.0)</b>\n\n"
+            "➕ <b>Добавление сервера (VIP VPN)</b>\n\n"
             "Отправьте данные сервера одной строкой через вертикальную черту <code>|</code>:\n\n"
             "<b>Формат 1 (Полная интеграция по API):</b>\n"
             "<code>Флаг Название | host:port | http://ip:port/path | login | password | inbound_id | https://sub.domain/sub</code>\n\n"
@@ -4404,7 +4673,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton(toggle_label, callback_data=f"admin_srv_toggle_{srv_id}")],
             [InlineKeyboardButton("✏️ Редактировать сервер", callback_data=f"admin_srv_edit_{srv_id}")],
-            [InlineKeyboardButton("🔗 Задать шаблон Web Panel Proxy 2.7.0", callback_data=f"admin_srv_tpl_{srv_id}")],
+            [InlineKeyboardButton("🔗 Задать шаблон VIP Proxy", callback_data=f"admin_srv_tpl_{srv_id}")],
             [InlineKeyboardButton("➕ Загрузить доп. ключи в пул сервера", callback_data=f"admin_add_vpn_{srv_id}")],
             [InlineKeyboardButton("🗑 Удалить сервер", callback_data=f"admin_srv_del_{srv_id}")],
             [InlineKeyboardButton("⬅️ Назад к списку серверов", callback_data="admin_servers_menu")]
@@ -4434,7 +4703,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "set_proxy_tpl"
         context.user_data["target_server_id"] = srv_id
         await query.edit_message_text(
-            f"🧩 <b>Шаблон Web Panel Proxy 2.7.0 для сервера #{srv_id}</b>\n\n"
+            f"🧩 <b>Шаблон VIP Proxy для сервера #{srv_id}</b>\n\n"
             f"Доступные переменные: <code>{{UUID}}</code>, <code>{{SUB_ID}}</code>, <code>{{USER_ID}}</code>, <code>{{HOST}}</code>, <code>{{PORT}}</code>, <code>{{NAME}}</code>.",
             parse_mode="HTML"
         )
@@ -4531,7 +4800,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         k_type = parts[2]
         days = int(parts[3])
         new_key = create_tariff_key(k_type, days)
-        label = "🌐 Единая подписка (3x-ui + Proxy 2.7.0)" if k_type == "VPN" else "🤖 Лицензия Бота"
+        label = "🌐 Единая подписка (VIP VPN)" if k_type == "VPN" else "🤖 Лицензия Бота"
         await query.message.reply_text(
             f"🔑 <b>Одноразовый ключ ({label} на {days} дн.) создан:</b>\n\n"
             f"<code>{new_key}</code>",
@@ -4903,7 +5172,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with sqlite3.connect(DB_PATH) as conn:
                 conn.execute("UPDATE servers SET proxy_template = ? WHERE id = ?", (text.strip(), srv_id))
                 conn.commit()
-            await msg.reply_text(f"✅ Шаблон Web Panel Proxy 2.7.0 сохранен для сервера #{srv_id}!", reply_markup=admin_dashboard_keyboard())
+            await msg.reply_text(f"✅ Шаблон VIP Proxy сохранен для сервера #{srv_id}!", reply_markup=admin_dashboard_keyboard())
             return
 
         elif mode == "set_subdom":
@@ -5031,6 +5300,100 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    
+    if mode == "lic_wizard_name":
+        context.user_data["lic_temp_name"] = text.strip()
+        context.user_data["mode"] = "lic_wizard_days"
+        await msg.reply_text(
+            f"⏳ <b>Шаг 2 из 3: Количество дней</b>\n\n"
+            f"Тариф: <b>{html.escape(text.strip())}</b>\n"
+            f"Введите количество дней действия ключа (число: <code>30</code>, <code>90</code>, <code>365</code> или <code>0</code> для бессрочного безлимита):",
+            parse_mode="HTML"
+        )
+        return
+
+    if mode == "lic_wizard_days":
+        try:
+            d_val = int(text.strip())
+            if d_val < 0:
+                raise ValueError
+        except ValueError:
+            await msg.reply_text("❌ Введите целое неотрицательное число дней (например, 30 или 0):")
+            return
+        context.user_data["lic_temp_days"] = d_val
+        context.user_data["mode"] = "lic_wizard_price"
+        d_lbl = "Бессрочно (0)" if d_val == 0 else f"{d_val} дн."
+        await msg.reply_text(
+            f"💰 <b>Шаг 3 из 3: Цена тарифа</b>\n\n"
+            f"Срок: <b>{d_lbl}</b>\n"
+            f"Введите стоимость в рублях (число, например: <code>9999</code>):",
+            parse_mode="HTML"
+        )
+        return
+
+    if mode == "lic_wizard_price":
+        try:
+            pr_val = float(text.strip().replace(",", "."))
+            if pr_val <= 0:
+                raise ValueError
+        except ValueError:
+            await msg.reply_text("❌ Введите корректную цену числом (например, 9999):")
+            return
+        p_name = context.user_data.get("lic_temp_name", "Тариф Бота")
+        p_days = context.user_data.get("lic_temp_days", 0)
+        context.user_data["mode"] = None
+        
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                t_cols = [r[1] for r in conn.execute("PRAGMA table_info(tariffs)").fetchall()]
+                c_grp = next((c for c in t_cols if c in ("category", "grp", "group_name", "tariff_group", "type", "tag")), t_cols[1] if len(t_cols) > 1 else None)
+                c_name = next((c for c in t_cols if c in ("name", "title", "plan_name")), t_cols[2] if len(t_cols) > 2 else "name")
+                c_days = next((c for c in t_cols if c in ("days", "duration", "duration_days", "period")), None)
+                c_rub = next((c for c in t_cols if c in ("price_rub", "price", "cost", "amount")), None)
+                c_stars = next((c for c in t_cols if c in ("price_stars", "stars")), None)
+                c_act = next((c for c in t_cols if c in ("is_active", "active", "status")), None)
+                
+                f_list = []
+                v_list = []
+                if c_grp:
+                    f_list.append(c_grp)
+                    v_list.append("Лицензия Бота")
+                if c_name:
+                    f_list.append(c_name)
+                    v_list.append(p_name)
+                if c_days:
+                    f_list.append(c_days)
+                    v_list.append(p_days)
+                if c_rub:
+                    f_list.append(c_rub)
+                    v_list.append(pr_val)
+                if c_stars:
+                    f_list.append(c_stars)
+                    v_list.append(int(pr_val // 2))
+                if c_act:
+                    f_list.append(c_act)
+                    v_list.append(1)
+                
+                q_cols = ", ".join(f_list)
+                q_ph = ", ".join(["?"] * len(v_list))
+                conn.execute(f"INSERT INTO tariffs ({q_cols}) VALUES ({q_ph})", v_list)
+                conn.commit()
+        except Exception as e:
+            await msg.reply_text(f"❌ Ошибка сохранения тарифа: {e}")
+            return
+            
+        d_lbl = "Бессрочно (0)" if p_days == 0 else f"{p_days} дн."
+        await msg.reply_text(
+            f"✅ <b>Тариф бота успешно создан и опубликован!</b>\n\n"
+            f"📌 Название: <b>{html.escape(p_name)}</b>\n"
+            f"⏳ Срок: <b>{d_lbl}</b>\n"
+            f"💵 Цена: <b>{pr_val:.0f} ₽</b>\n\n"
+            f"Клиенты уже могут выбрать его в меню «🤖 Купить такого бота».",
+            parse_mode="HTML",
+            reply_markup=main_keyboard(user.id)
+        )
+        return
+
     if mode == "order_bot_input":
         context.user_data["mode"] = None
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🤖 Создать ключ лицензии БОТА (365д)", callback_data="admin_gen_BOT_365")]])
@@ -5148,7 +5511,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disc_pct = info[19] if (info and len(info) > 19) else 0
         disc_line = f"\n🎫 <b>Активна ваша скидка по купону: -{disc_pct}%!</b>\n" if disc_pct > 0 else ""
 
-        tariffs = [t for t in get_active_tariffs() if "Бота" not in t[1]]
+        tariffs = get_active_tariffs(for_bot=True)
         kb_rows = []
         for t_id, grp, name, days, pr_rub, pr_stars in tariffs:
             final_rub = max(1, int(pr_rub * (100 - disc_pct) / 100)) if disc_pct > 0 else pr_rub
@@ -5156,7 +5519,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb_rows.append([InlineKeyboardButton(f"{name} — {price_str}", callback_data=f"buy_tariff_{t_id}")])
         kb_rows.append([InlineKeyboardButton("🔑 Мои ключи", callback_data="client_my_keys")])
         await msg.reply_text(
-            f"🌐 <b>Единая подписка Bot_VIP (3x-ui + Web Panel Proxy 2.7.0)</b>{disc_line}\n\n"
+            f"🌐 <b>Единая подписка Bot_VIP (VIP VPN)</b>{disc_line}\n\n"
             f"✅ Безлимитный трафик и высокая скорость\n"
             f"✅ Возможность иметь несколько ключей для разных устройств в разделе <b>«🔑 Мои ключи»</b>\n\n"
             f"Выберите подходящий тариф для покупки нового ключа:",
@@ -5169,7 +5532,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         info = get_user_info(user.id)
         bot_lic = info[9] if (info and info[9]) else ""
         lic_line = f"\n🔐 <b>Ваша активная лицензия:</b> <code>{html.escape(bot_lic)}</code>\n" if bot_lic else ""
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📋 Тарифы и покупка Бота", callback_data="order_bot")]])
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 Тарифы и покупка Бота", callback_data="order_bot")],
+            [InlineKeyboardButton("🔑 Мои лицензии Бота", callback_data="my_bot_licenses")]
+        ])
         await msg.reply_text(
             "🤖 <b>Продажа и аренда защищенного бота (Bot_VIP)</b>\n"
             f"{lic_line}\n"
@@ -5252,7 +5618,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "ℹ️ О боте":
         custom_about = get_setting(
             "text_about",
-            "🤖 <b>Bot_VIP</b> — единая система подключения 3x-ui + Web Panel Proxy 2.7.0 и продажи защищенных Telegram-ботов."
+            "🤖 <b>Bot_VIP</b> — единая система подключения VIP VPN и продажи защищенных Telegram-ботов."
         )
         await msg.reply_text(custom_about, parse_mode="HTML")
 
@@ -5301,27 +5667,32 @@ CMS_SECTIONS = {
     "support": ("💬 Ссылка: Поддержка", "cms_support_url", ""),
 }
 
-def build_tariffs_block() -> str:
+def build_tariffs_block():
     try:
         with sqlite3.connect(DB_PATH) as conn:
-            rows = conn.execute("SELECT name, days, price_rub FROM tariffs WHERE is_active = 1 ORDER BY id ASC").fetchall()
-        if rows:
-            lines = ["📋 <b>Тарифы:</b>"]
-            for name, days, rub in rows:
-                clean_name = name if name.startswith("📱") else f"📱 {name}"
-                lines.append(f"• {clean_name} — <b>{rub} ₽</b>")
-            return "\n".join(lines)
-    except Exception:
-        pass
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(tariffs)").fetchall()]
+            act_cond = "AND is_active = 1" if "is_active" in cols else ""
+            rows = conn.execute(
+                f"SELECT name, price_rub FROM tariffs WHERE is_bot = 0 {act_cond} ORDER BY price_rub ASC"
+            ).fetchall()
+            if rows:
+                lines = ["📋 Тарифы:"]
+                for name, price in rows:
+                    p_str = int(price) if float(price).is_integer() else price
+                    lines.append(f"• {name} — {p_str} ₽")
+                return "\n".join(lines)
+    except Exception as e:
+        import logging
+        logging.error(f"build_tariffs_block error: {e}")
     return (
-        "📋 <b>Тарифы:</b>\n"
-        "• 📱 30 Дней 1 Устр. — <b>200 ₽</b>\n"
-        "• 📱 60 Дней 1 Устр. — <b>350 ₽</b>\n"
-        "• 📱 90 Дней 1 Устр. — <b>500 ₽</b>\n"
-        "• 📱 180 Дней 1 Устр. — <b>999 ₽</b>\n"
-        "• 📱 365 Дней 1 Устр. — <b>1799 ₽</b>\n"
-        "• 📱 Акция 30дней 2Устроиства — <b>150 ₽</b>\n"
-        "• 📱 Акция 60дней 2Устроиства — <b>250 ₽</b>"
+        "📋 Тарифы:\n"
+        "• 📱 Акция 30дней 2Устроиства — 150 ₽\n"
+        "• 📱 30 Дней 1 Устр. — 199 ₽\n"
+        "• 📱 Акция 60дней 2Устроиства — 250 ₽\n"
+        "• 📱 60 Дней 1 Устр. — 350 ₽\n"
+        "• 📱 90 Дней 1 Устр. — 500 ₽\n"
+        "• 📱 180 Дней 1 Устр. — 999 ₽\n"
+        "• 📱 365 Дней 1 Устр. — 1790 ₽"
     )
 
 def build_custom_start_content(user_id: int):
@@ -5494,6 +5865,14 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
             "SELECT id, expires_at, is_active FROM user_keys WHERE user_id = ? ORDER BY id DESC",
             (uid,)
         ).fetchall()
+        dev_counts = dict(conn.execute(
+            "SELECT key_id, COUNT(DISTINCT hwid) FROM key_devices WHERE key_id IN (SELECT id FROM user_keys WHERE user_id = ?) GROUP BY key_id",
+            (uid,)
+        ).fetchall())
+        bot_lic_rows = conn.execute(
+            "SELECT id, lic_key, server_ip, server_hwid, is_active FROM bot_licenses WHERE bound_admin_id = ? OR bound_admin_id = ?",
+            (str(uid), uid)
+        ).fetchall()
 
     uname_str = f"@{html.escape(uname)}" if uname else "<i>_не указан_</i>"
     deliv_str = "<b>недоступен (блок)</b>" if bot_blk else "<b>доступен для сообщений</b>"
@@ -5525,8 +5904,9 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
 
     kb_rows = []
     for kid, _, _ in key_rows[:15]:
+        d_cnt = dev_counts.get(kid, 0) if "dev_counts" in locals() else 0
         kb_rows.append([InlineKeyboardButton(f"🔑 Ключ #{kid}", callback_data=f"ckm_kview_{kid}_{uid}")])
-
+        kb_rows.append([InlineKeyboardButton(f"📱 Сбросить HWID #{kid} ({d_cnt} дев.)", callback_data=f"ckm_rhwid_{kid}_{uid}")])
     kb_rows.append([InlineKeyboardButton("➕ Добавить ключ", callback_data=f"ckm_wgrp_{uid}")])
     kb_rows.append([InlineKeyboardButton("💬 Написать", callback_data=f"admin_uact_msg_{uid}")])
     kb_rows.append([
@@ -5535,6 +5915,15 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
         InlineKeyboardButton("➖ Списать", callback_data=f"ckm_balsub_{uid}")
     ])
     kb_rows.append([InlineKeyboardButton(f"📊 Реферальный коэффициент: {ref_coeff:.1f}x", callback_data=f"ckm_refc_{uid}")])
+
+    # Кнопка персонала с кристаликом PRO 💎
+    cur_m = staff_roles.get_staff_member(DB_PATH, uid)
+    if cur_m:
+        r_name = "Админ" if cur_m.get("role") == "admin" else "Модер"
+        role_btn_text = f"👑 Роль: {r_name} 💎"
+    else:
+        role_btn_text = "👥 Персонал (Админ / Модер) 💎"
+    kb_rows.append([InlineKeyboardButton(role_btn_text, callback_data=f"admin_uact_role_{uid}")])
 
     ban_txt = "✅ Разблокировать" if is_ban else "🚫 Заблокировать"
     kb_rows.append([InlineKeyboardButton(ban_txt, callback_data=f"admin_uact_ban_{uid}")])
@@ -5826,7 +6215,17 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
         if "build_admin_dashboard_text" in globals() and "admin_dashboard_keyboard" in globals():
             txt = build_admin_dashboard_text()
             kb = admin_dashboard_keyboard()
-            kb_rows = [list(row) for row in kb.inline_keyboard]
+            # Премахване на междинния дубликат На главную
+            kb_rows = [list(row) for row in kb.inline_keyboard if not any(getattr(b, "callback_data", "") in ("admin_back_main", "start_back_main") for b in row)]
+            
+            # Бутон за 7-дневен PRO пробен период (показва се ако не е активиран PRO или пробник)
+            is_pro = staff_roles.is_pro_edition(get_setting)
+            trial_used = get_setting("pro_trial_used", "0") == "1"
+            if not is_pro and not trial_used:
+                kb_rows.append([InlineKeyboardButton("🎁 Пробник PRO на 7 дней 💎", callback_data="admin_pro_trial_info")])
+            elif not is_pro and trial_used:
+                kb_rows.append([InlineKeyboardButton("🔒 PRO доступ (Купить) 💎", callback_data="lic_admin_menu")])
+
             kb_rows.append([InlineKeyboardButton("✏️ Редактирование текстов и баннеров", callback_data="cms_open_menu")])
             kb_rows.append([InlineKeyboardButton("🔐 Лицензии на бота (Продажи)", callback_data="lic_admin_menu")])
             kb_rows.append([InlineKeyboardButton("🈴 На главную", callback_data="start_back_main")])
@@ -5882,7 +6281,7 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
             kb = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("👥 Пользователи", callback_data="admin_users_menu"),
-                    InlineKeyboardButton("🖥 Серверы 3X-UI", callback_data="admin_servers_menu")
+                    InlineKeyboardButton("🖥 Серверы VPN", callback_data="admin_servers_menu")
                 ],
                 [
                     InlineKeyboardButton("💳 Оплата и Тарифы", callback_data="admin_payments_menu"),
@@ -6053,6 +6452,17 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
 
 
     # 8. Управление лицензиями проданных копий бота
+    
+    if data == "lic_add_tariff_step1":
+        await query.answer()
+        context.user_data["mode"] = "lic_wizard_name"
+        await query.message.reply_text(
+            "📝 <b>Шаг 1 из 3: Название тарифа</b>\n\n"
+            "Введите название тарифа бота (например: <code>🚀 Старт 30 дней</code> или <code>♾ Безлимит</code>):",
+            parse_mode="HTML"
+        )
+        return
+
     if data == "lic_admin_menu":
         await query.answer()
         if not is_any_admin_ckm(user.id):
@@ -6060,7 +6470,8 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
         with sqlite3.connect(DB_PATH) as conn:
             rows = conn.execute("SELECT id, lic_key, bound_ip, bound_admin_id, is_active FROM bot_licenses ORDER BY id DESC LIMIT 15").fetchall()
         lines = ["🔐 <b>Управление лицензиями Bot_VIP</b>\n"]
-        kb_rows = [[InlineKeyboardButton("➕ Сгенерировать новый ключ продажи", callback_data="lic_gen_new")]]
+        kb_rows = [[InlineKeyboardButton("➕ Добавить тариф бота (3 шага)", callback_data="lic_add_tariff_step1")],
+            [InlineKeyboardButton("➕ Сгенерировать новый ключ продажи", callback_data="lic_gen_new")]]
         for lid, lkey, bip, badm, lact in rows:
             st = "🟢" if lact else "🔴"
             ip_info = f"IP: {bip} (ID: {badm})" if bip else "Свободен (ждет установки)"
@@ -6274,6 +6685,44 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
             txt, kb = render_ckm_key_detail(kid, uid)
             await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
             raise ApplicationHandlerStop
+
+        if data.startswith("ckm_rhwid_"):
+            try:
+                parts = data.split("_")
+                kid, uid = int(parts[2]), int(parts[3])
+                with sqlite3.connect(DB_PATH) as conn:
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM key_devices WHERE key_id = ?", (kid,))
+                    del_cnt = cur.rowcount
+                    conn.commit()
+                alert_msg = f"✅ HWID сброшен для ключа #{kid}!\n(Удалено активных привязок: {del_cnt})"
+                await query.answer(alert_msg, show_alert=True)
+                try:
+                    txt, kb = render_single_user_dossier(uid)
+                    await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
+                except Exception:
+                    pass
+            except Exception as e:
+                await query.answer(f"Ошибка: {e}", show_alert=True)
+            return
+
+        if data.startswith("ckm_rbot_"):
+            try:
+                parts = data.split("_")
+                uid = int(parts[-1])
+                lic_key = parts[2]
+                with sqlite3.connect(DB_PATH) as conn:
+                    conn.execute("UPDATE bot_licenses SET server_hwid = NULL, server_ip = NULL WHERE lic_key = ?", (lic_key,))
+                    conn.commit()
+                await query.answer(f"✅ Лицензия {lic_key[-8:]} отвязана от сервера!", show_alert=True)
+                try:
+                    txt, kb = render_single_user_dossier(uid)
+                    await query.edit_message_text(txt, parse_mode="HTML", reply_markup=kb)
+                except Exception:
+                    pass
+            except Exception as e:
+                await query.answer(f"Ошибка: {e}", show_alert=True)
+            return
 
         if data.startswith("ckm_kdel_"):
             _, _, kid_s, uid_s = data.split("_")
@@ -6585,7 +7034,7 @@ async def render_my_keys_screen(user_id: int) -> tuple[str, InlineKeyboardMarkup
 if __name__ == "__main__":
     init_db()
     verify_server_lock()
-    app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
+    app = ApplicationBuilder().token(TOKEN).request(HTTPXRequest(connection_pool_size=16, connect_timeout=20.0, read_timeout=30.0, write_timeout=20.0, pool_timeout=10.0)).post_init(post_init).build()
 
     if app.job_queue:
         app.job_queue.run_daily(daily_backup_job, time=time(hour=3, minute=0))
@@ -6624,3 +7073,76 @@ async def handle_new_subscription(user_id: int):
         
     response_text += "Скопируйте ссылки и импортируйте их в ваш VPN-клиент (v2rayNG, Streisand, Nekobox)."
     return response_text
+
+
+async def handle_hwid_reset_callbacks(update, context):
+    query = update.callback_query
+    data = query.data
+    user = update.effective_user
+    
+    if data.startswith("reset_vpn_hwid_"):
+        k_id = int(data.split("_")[-1])
+        price = 20
+        # Создаем инвойс на оплату сброса VPN (20 руб)
+        pay_buttons = []
+        for p_key, p_info in PAYMENT_PROVIDERS.items():
+            if get_setting(f"pay_{p_key}_enabled", "0") == "1":
+                pay_buttons.append([
+                    InlineKeyboardButton(f"💳 Оплатить {price} ₽ через {p_info['title']}", callback_data=f"pay_exec_{p_key}_vpnreset_{k_id}")
+                ])
+        if not pay_buttons:
+            pay_buttons.append([InlineKeyboardButton("💳 Оплатить через реквизиты", callback_data="manual_order_vpn")])
+        pay_buttons.append([InlineKeyboardButton("⬅️ Назад к ключу", callback_data=f"client_key_det_{k_id}")])
+        
+        await query.message.edit_text(
+            f"📱 <b>Сброс привязанных устройств для VPN-ключа #{k_id}</b>\n\n"
+            f"Стоимость сброса списка устройств: <b>{price} ₽</b>\n"
+            f"После оплаты все старые смартфоны и ПК будут отвязаны, и вы сможете подключить новые.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(pay_buttons)
+        )
+        await query.answer()
+        return
+
+    elif data == "my_bot_licenses":
+        with sqlite3.connect(DB_PATH) as conn:
+            licenses = conn.execute("SELECT lic_key, buyer_note, server_ip, expires_id, is_active FROM bot_licenses WHERE bound_admin_id = ?", (str(user.id),)).fetchall()
+        
+        if not licenses:
+            await query.answer("У вас пока нет купленных лицензий Bot_VIP.", show_alert=True)
+            return
+            
+        txt = "🔑 <b>Ваши приобретенные лицензии Bot_VIP:</b>\n\n"
+        kb_rows = []
+        for lic_key, note, s_ip, exp, active in licenses:
+            ip_str = s_ip if s_ip else "Не привязан к VPS"
+            txt += f"• <code>{lic_key}</code>\n  Статус: {'🟢 Активен' if active else '🔴 Отключен'}\n  VPS: {ip_str}\n\n"
+            kb_rows.append([InlineKeyboardButton(f"🔄 Сбросить привязку VPS для {lic_key[-8:]} (200₽)", callback_data=f"reset_bot_lic_{lic_key}")])
+            
+        kb_rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="order_bot")])
+        await query.message.edit_text(txt, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb_rows))
+        await query.answer()
+        return
+
+    elif data.startswith("reset_bot_lic_"):
+        lic_key = data.replace("reset_bot_lic_", "")
+        price = 200
+        pay_buttons = []
+        for p_key, p_info in PAYMENT_PROVIDERS.items():
+            if get_setting(f"pay_{p_key}_enabled", "0") == "1":
+                pay_buttons.append([
+                    InlineKeyboardButton(f"💳 Оплатить {price} ₽ через {p_info['title']}", callback_data=f"pay_exec_{p_key}_botreset_{lic_key}")
+                ])
+        if not pay_buttons:
+            pay_buttons.append([InlineKeyboardButton("💳 Оплатить через реквизиты", callback_data="manual_order_bot")])
+        pay_buttons.append([InlineKeyboardButton("⬅️ Назад к лицензиям", callback_data="my_bot_licenses")])
+        
+        await query.message.edit_text(
+            f"🔄 <b>Сброс привязки сервера для лицензии {lic_key}</b>\n\n"
+            f"Стоимость отвязки от старого VPS: <b>{price} ₽</b>\n"
+            f"После оплаты лицензия будет отвязана от текущего железа, и вы сможете активировать её на новом сервере.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(pay_buttons)
+        )
+        await query.answer()
+        return

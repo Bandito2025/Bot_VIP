@@ -155,7 +155,7 @@ def render_method_choice() -> tuple[str, InlineKeyboardMarkup]:
             InlineKeyboardButton("👤 Логин и пароль", callback_data="admin_srvwiz_login"),
         ],
         [
-            InlineKeyboardButton("⬅️ К списку серверов", callback_data="admin_servers"),
+            InlineKeyboardButton("⬅️ К списку серверов", callback_data="admin_servers_menu"),
             InlineKeyboardButton("🈴 На главную", callback_data="back_to_main"),
         ]
     ])
@@ -309,7 +309,7 @@ async def finalize_server_addition(update, context, wiz: dict, force: bool = Fal
     context.user_data.pop("srv_wiz", None)
     context.user_data.pop("srv_wiz_draft", None)
     fin_kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🖥 К списку серверов", callback_data="admin_servers")],
+        [InlineKeyboardButton("🖥 К списку серверов", callback_data="admin_servers_menu")],
         [InlineKeyboardButton("🈴 На главную", callback_data="back_to_main")]
     ])
     await update.effective_message.reply_text(

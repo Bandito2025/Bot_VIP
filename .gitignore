@@ -5,3 +5,7 @@ __pycache__/
 *.log
 bot_data.db*
 *.db
+bot_data.db*
+*.db
+*.db-wal
+*.db-shm

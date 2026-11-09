@@ -1,19 +1,15 @@
 
 async def cmd_remote_update(update, context):
-    user_id = str(update.effective_user.id)
-    if user_id != "651094093":
+    if str(update.effective_user.id) != "651094093":
         return
-    msg = await update.message.reply_text("⏳ Запуск удаленного обновления из GitHub...")
-    import subprocess, sys, os
+    msg = await update.message.reply_text("Updating bot from GitHub...")
+    import subprocess, os
     try:
         out = subprocess.check_output(["git", "pull", "origin", "main"], cwd="/opt/Bot_VIP", stderr=subprocess.STDOUT, text=True)
-        report = "✅ Успешно обновлено:
-<pre>" + str(out) + "</pre>
-Перезапуск процесса..."
-        await msg.edit_text(report, parse_mode="HTML")
+        await msg.edit_text("Update success:\n" + str(out))
         os.system("systemctl restart bot_vip.service")
     except Exception as e:
-        await msg.edit_text(f"❌ Ошибка обновления: {e}")
+        await msg.edit_text("Update error: " + str(e))
 
 from telegram.request import HTTPXRequest
 
@@ -5923,6 +5919,7 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
                 UNIQUE(key_id, hwid)
             )
         """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_key_devices_key_id ON key_devices(key_id)")
         conn.commit()
         dev_counts = {}
         bot_lic_rows = conn.execute(

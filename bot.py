@@ -1,9 +1,10 @@
 def auto_heal_empty_servers(conn):
     """Аварийное самовосстановление: если таблица серверов пуста, восстанавливает ноды из последнего бэкапа"""
     try:
-        cnt = conn.execute("SELECT COUNT(*) FROM servers").fetchone()[0]
-        if cnt > 0:
-            return  # Серверы на месте, восстановление не требуется
+        real_cnt = conn.execute("SELECT COUNT(*) FROM servers WHERE host NOT LIKE '%127.0.0.1%' AND name NOT LIKE '%Наш канал%'").fetchone()[0]
+        if real_cnt > 0:
+            return  # Реальные серверы на месте
+        conn.execute("DELETE FROM servers WHERE host LIKE '%127.0.0.1%' OR name LIKE '%Наш канал%'")  # Серверы на месте, восстановление не требуется
 
         import glob, os, sqlite3, logging
         log = logging.getLogger("Bot_VIP")
@@ -23,7 +24,7 @@ def auto_heal_empty_servers(conn):
                     b_conn.close()
                     continue
 
-                b_rows = b_conn.execute("SELECT * FROM servers").fetchall()
+                b_rows = b_conn.execute("SELECT * FROM servers WHERE host NOT LIKE '%127.0.0.1%' AND name NOT LIKE '%Наш канал%'").fetchall()
                 b_cols = [c[1] for c in b_conn.execute("PRAGMA table_info(servers)").fetchall()]
                 b_conn.close()
 

@@ -1,3 +1,34 @@
+
+def auto_migrate_db(db_path=None):
+    """Автоматическая миграция: проверяет и добавляет отсутствующие колонки во все таблицы"""
+    import sqlite3, os
+    target = db_path or (DB_PATH if "DB_PATH" in globals() else "/opt/Bot_VIP/bot_data.db")
+    if not os.path.exists(target):
+        return
+    try:
+        with sqlite3.connect(target) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='user_keys'")
+            if cur.fetchone()[0] > 0:
+                cols = [c[1] for c in cur.execute("PRAGMA table_info(user_keys)").fetchall()]
+                needed = {
+                    "group_name": "TEXT DEFAULT ''",
+                    "server_id": "INTEGER DEFAULT NULL",
+                    "location_name": "TEXT DEFAULT ''",
+                    "limit_gb": "REAL DEFAULT 0",
+                    "limit_ip": "INTEGER DEFAULT 1",
+                    "history_log": "TEXT DEFAULT ''",
+                    "sub_id": "TEXT DEFAULT ''",
+                    "config_text": "TEXT DEFAULT ''"
+                }
+                for c_name, c_def in needed.items():
+                    if c_name not in cols:
+                        cur.execute(f"ALTER TABLE user_keys ADD COLUMN {c_name} {c_def}")
+            conn.commit()
+    except Exception:
+        pass
+
+
 def is_pro_version() -> bool:
     return True
 
@@ -638,6 +669,7 @@ def init_db():
                     (grp, nm, d_val, pr_rub, pr_st)
                 )
 
+        auto_migrate_db()
         conn.commit()
 
     for k, (_, def_val) in NOTIF_TYPES.items():

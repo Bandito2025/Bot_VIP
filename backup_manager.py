@@ -6,6 +6,9 @@ import logging
 logger = logging.getLogger("Bot_VIP")
 DB_PATH = "/opt/Bot_VIP/bot_data.db"
 
+def is_pro_version() -> bool:
+    return True
+
 def get_backups_list():
     patterns = [
         "/opt/Bot_VIP/backup/*/bot_data.db",
@@ -24,8 +27,38 @@ def get_backups_list():
         valid.append(f)
     return sorted(valid, key=lambda x: os.path.getmtime(x), reverse=True)
 
-def auto_heal_empty_servers(conn):
+def auto_migrate_db(db_path=None):
+    """Проверяет и добавляет недостающие колонки в user_keys"""
+    target = db_path or DB_PATH
+    if not os.path.exists(target):
+        return
     try:
+        with sqlite3.connect(target) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='user_keys'")
+            if cur.fetchone()[0] > 0:
+                cols = [c[1] for c in cur.execute("PRAGMA table_info(user_keys)").fetchall()]
+                needed = {
+                    "group_name": "TEXT DEFAULT ''",
+                    "server_id": "INTEGER DEFAULT NULL",
+                    "location_name": "TEXT DEFAULT ''",
+                    "limit_gb": "REAL DEFAULT 0",
+                    "limit_ip": "INTEGER DEFAULT 1",
+                    "history_log": "TEXT DEFAULT ''",
+                    "sub_id": "TEXT DEFAULT ''",
+                    "config_text": "TEXT DEFAULT ''"
+                }
+                for c_name, c_def in needed.items():
+                    if c_name not in cols:
+                        cur.execute(f"ALTER TABLE user_keys ADD COLUMN {c_name} {c_def}")
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка auto_migrate_db: {e}")
+
+def auto_heal_empty_servers(conn):
+    """Автоматическое восстановление серверов при запуске бота"""
+    try:
+        auto_migrate_db(DB_PATH)
         cur = conn.cursor()
         cur.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='servers'")
         if cur.fetchone()[0] == 0:
@@ -76,6 +109,7 @@ def auto_heal_empty_servers(conn):
         logger.error(f"Ошибка auto_heal_empty_servers: {e}")
 
 def restore_database_from_best_backup():
+    """Ручное восстановление базы данных из лучшего архива"""
     backups = get_backups_list()
     if not backups:
         return False, "❌ В папке backup не найдено ни одного файла резервной копии."
@@ -146,6 +180,8 @@ def restore_database_from_best_backup():
                             continue
 
             conn.commit()
+
+        auto_migrate_db(DB_PATH)
 
         if restored_srv > 0 or restored_users > 0:
             text = (

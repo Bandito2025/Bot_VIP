@@ -872,11 +872,44 @@ def start_sub_aggregator_server():
                             row_u = conn.execute("SELECT vpn_config FROM users WHERE sub_id = ? AND is_vip = 1", (sub_id,)).fetchone()
                             cfg = row_u[0] if (row_u and row_u[0]) else ""
                     if cfg:
+                        acc_hdr = (self.headers.get("Accept") or "").lower()
+                        ua_hdr = (self.headers.get("User-Agent") or "").lower()
+                        is_vpn_client = any(app in ua_hdr for app in ["v2ray", "happ", "streisand", "hiddify", "shadowrocket", "sing-box", "clash", "nekobox", "karing", "flclash", "curl", "wget"])
+                        is_browser = ("text/html" in acc_hdr or "mozilla" in ua_hdr) and not is_vpn_client
+
+                        if is_browser and "format=raw" not in self.path and "raw=1" not in self.path and build_sub_dashboard_html:
+                            try:
+                                sub_full_url = f"https://sub.svoii-vpn.online/sub/{sub_id}"
+                                u_info = {"name": f"user_{sub_id[:8]}", "total_gb": "0.00", "up_gb": "0.00", "down_gb": "0.00", "limit_gb": "Неограниченно", "days_left": "∞", "expire_str": "Бессрочно", "status": "Активен", "last_online": "Сегодня"}
+                                try:
+                                    with sqlite3.connect(DB_PATH) as _dbc:
+                                        _kr = _dbc.execute("SELECT user_id, limit_gb, expires_at FROM user_keys WHERE sub_id = ?", (sub_id,)).fetchone()
+                                        if _kr and _kr[0]:
+                                            _ur = _dbc.execute("SELECT username, first_name, traffic_used, vip_expires FROM users WHERE user_id = ?", (_kr[0],)).fetchone()
+                                            if _ur:
+                                                u_info["name"] = str(_ur[0] or _ur[1] or _kr[0])
+                                                if _ur[2]:
+                                                    u_info["total_gb"] = f"{float(_ur[2])/1024/1024/1024:.2f}"
+                                                if _ur[3]:
+                                                    u_info["expire_str"] = str(_ur[3])[:10]
+                                                    u_info["days_left"] = "Активен"
+                                except Exception:
+                                    pass
+                                html_page = build_sub_dashboard_html(sub_full_url, sub_id, u_info, cfg).encode("utf-8")
+                                self.send_response(200)
+                                self.send_header("Content-Type", "text/html; charset=utf-8")
+                                self.send_header("Content-Length", str(len(html_page)))
+                                self.send_header("Connection", "close")
+                                self.end_headers()
+                                self.wfile.write(html_page)
+                                return
+                            except Exception:
+                                pass
+
                         b64_body = base64.b64encode(cfg.encode("utf-8"))
                         self.send_response(200)
                         self.send_header("Content-Type", "text/plain; charset=utf-8")
                         self.send_header("Connection", "close")
-                        self.send_header("Profile-Title", "Svoii VPN")
                         self.end_headers()
                         self.wfile.write(b64_body)
                         return

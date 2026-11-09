@@ -3,8 +3,7 @@ import io
 import urllib.parse
 
 def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs_raw: str) -> str:
-    """Генерирует автономный премиальный веб-дашборд подписки (в стиле Web-Panel / 3X-UI)"""
-    # 1. Генерация QR-кода
+    """Генерирует веб-дашборд подписки в стиле 3X-UI / Web-Panel"""
     qr_b64 = ""
     try:
         import qrcode
@@ -16,9 +15,8 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
         img.save(buf, format="PNG")
         qr_b64 = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
     except Exception:
-        qr_b64 = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={sub_url}"
+        qr_b64 = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={urllib.parse.quote(sub_url)}"
 
-    # 2. Парсинг конфигураций серверов
     cfg_lines = [l.strip() for l in configs_raw.strip().splitlines() if l.strip() and not l.strip().startswith("#")]
     cfg_count = len(cfg_lines)
 
@@ -34,16 +32,15 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
                 <span class="badge-proto">{proto}</span>
                 <span class="cfg-name">{name}</span>
             </div>
-            <button class="btn-copy-small" onclick="navigator.clipboard.writeText('{c}'); alert('Конфигурация скопирована!');">📋 Копировать</button>
+            <button class="btn-copy-small" onclick="navigator.clipboard.writeText('{c}'); alert('Скопировано в буфер!');">📋 Копировать</button>
         </div>
         """
 
-    # 3. Данные пользователя
-    u_name = user_info.get("name", "Клиент")
+    u_name = user_info.get("name", "Пользователь")
     up_gb = user_info.get("up_gb", "0.00")
     down_gb = user_info.get("down_gb", "0.00")
     total_used = user_info.get("total_gb", "0.00")
-    limit_gb = user_info.get("limit_gb", "∞")
+    limit_gb = user_info.get("limit_gb", "Неограниченно")
     days_left = user_info.get("days_left", "∞")
     expire_str = user_info.get("expire_str", "Бессрочно")
     status_text = user_info.get("status", "Неограниченно")
@@ -70,7 +67,6 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
         * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
         body {{ background: var(--bg-color); color: var(--text-main); display: flex; justify-content: center; min-height: 100vh; padding: 24px 16px; }}
         .wrapper {{ width: 100%; max-width: 780px; }}
-        
         .header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }}
         .user-block {{ display: flex; align-items: center; gap: 14px; }}
         .avatar {{ width: 44px; height: 44px; background: var(--accent-blue); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 20px; }}
@@ -109,7 +105,6 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
         .sub-content {{ flex: 1; min-width: 0; }}
         .sub-title {{ font-size: 13px; font-weight: 600; margin-bottom: 2px; }}
         .sub-link {{ font-size: 13px; color: var(--text-muted); font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-        .sub-actions {{ display: flex; gap: 8px; }}
         .btn-act {{ width: 36px; height: 36px; background: var(--card-sub); border: 1px solid var(--border-color); border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-main); font-size: 15px; }}
         
         .qr-card {{ background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; padding: 24px; display: flex; align-items: center; gap: 24px; margin-bottom: 20px; }}
@@ -208,7 +203,7 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
                     <div class="sub-link">{sub_url}</div>
                 </div>
                 <div class="sub-actions">
-                    <button class="btn-act" onclick="navigator.clipboard.writeText('{sub_url}'); alert('Ссылка подписки скопирована!');" title="Скопировать">📋</button>
+                    <button class="btn-act" onclick="navigator.clipboard.writeText('{sub_url}'); alert('Ссылка скопирована!');" title="Скопировать">📋</button>
                 </div>
             </div>
 
@@ -216,7 +211,7 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
                 <img src="{qr_b64}" class="qr-img" alt="QR Code">
                 <div class="qr-text">
                     <h3>Сканируйте телефоном</h3>
-                    <p>Отсканируйте этот код в VPN-приложении (Happ, v2rayTun, Hiddify, Streisand), чтобы добавить подписку без ручного копирования ссылки.</p>
+                    <p>Отсканируйте этот код в приложении (Happ, v2rayTun, Hiddify, Streisand) для быстрого добавления серверов.</p>
                 </div>
             </div>
         </div>

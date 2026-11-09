@@ -5902,11 +5902,13 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
             "SELECT id, expires_at, is_active FROM user_keys WHERE user_id = ? ORDER BY id DESC",
             (uid,)
         ).fetchall()
-        try:
+    try:
         dev_counts = dict(conn.execute(
             "SELECT key_id, COUNT(DISTINCT hwid) FROM key_devices WHERE key_id IN (SELECT id FROM user_keys WHERE user_id = ?) GROUP BY key_id",
             (uid,)
         ).fetchall())
+    except Exception:
+        dev_counts = {}
     except Exception:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS key_devices (

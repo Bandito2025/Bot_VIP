@@ -1,3 +1,16 @@
+def get_update_info():
+    import subprocess
+    try:
+        subprocess.run(["git", "fetch", "origin", "main"], cwd="/opt/Bot_VIP", timeout=4, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        local_h = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd="/opt/Bot_VIP", text=True).strip()
+        remote_h = subprocess.check_output(["git", "rev-parse", "--short", "origin/main"], cwd="/opt/Bot_VIP", text=True).strip()
+        if local_h != remote_h:
+            msg = subprocess.check_output(["git", "log", "-1", "--format=%s", "origin/main"], cwd="/opt/Bot_VIP", text=True).strip()
+            return f"\n🔔 <b>ДОСТУПНО ОБНОВЛЕНИЕ!</b>\n🆕 Новая версия: <code>{remote_h}</code>\n📝 Что нового: <i>{msg}</i>\n\n"
+        return "\n✅ <b>Установлена последняя версия</b>\n\n"
+    except Exception:
+        return "\n"
+
 def get_update_banner():
     import subprocess
     try:
@@ -3745,7 +3758,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await query.edit_message_text(
             f"🔄 <b>Управление обновлениями прямо из бота</b>\n\n"
-            f"📌 Текущая версия (commit): <code>{html.escape(commit)}</code>\n"
+            f"{get_update_info()}📌 Текущая версия (commit): <code>{html.escape(commit)}</code>\n"
             f"📦 Репозиторий: <code>Bandito2025/Bot_VIP</code>\n\n"
             f"При нажатии бот автоматически создаст бэкап БД, скачает свежий код с GitHub и перезапустится:",
             parse_mode="HTML",
@@ -5909,7 +5922,43 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
             try:
 
 
-                u_extra = conn.execute("SELECT COALESCE(balance, 0), COALESCE(ref_coeff, 1.0) FROM users WHERE user_id = ?", (uid,)).fetchone()
+                try:
+
+
+
+                    u_extra = conn.execute("SELECT COALESCE(balance, 0), COALESCE(ref_coeff, 1.0) FROM users WHERE user_id = ?", (uid,)).fetchone()
+
+
+
+                except Exception:
+
+
+
+                    try:
+
+
+
+                        conn.execute("ALTER TABLE users ADD COLUMN balance REAL DEFAULT 0")
+
+
+
+                        conn.execute("ALTER TABLE users ADD COLUMN ref_coeff REAL DEFAULT 1.0")
+
+
+
+                        conn.commit()
+
+
+
+                        u_extra = conn.execute("SELECT COALESCE(balance, 0), COALESCE(ref_coeff, 1.0) FROM users WHERE user_id = ?", (uid,)).fetchone()
+
+
+
+                    except Exception:
+
+
+
+                        u_extra = (0, 1.0)
 
 
             except Exception:
@@ -5963,13 +6012,25 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
     try:
         try:
 
-            dev_counts = dict(conn.execute(
+            try:
 
-                "SELECT key_id, COUNT(DISTINCT hwid) FROM key_devices WHERE key_id IN (SELECT id FROM user_keys WHERE user_id = ?) GROUP BY key_id",
 
-                (uid,)
+                dev_counts = dict(conn.execute(
 
-            ).fetchall())
+
+                    "SELECT key_id, COUNT(DISTINCT hwid) FROM key_devices WHERE key_id IN (SELECT id FROM user_keys WHERE user_id = ?) GROUP BY key_id",
+
+
+                    (uid,)
+
+
+                ).fetchall())
+
+
+            except Exception:
+
+
+                dev_counts = {}
 
         except Exception:
 

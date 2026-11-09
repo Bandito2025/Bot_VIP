@@ -1951,7 +1951,7 @@ def get_active_tariffs(for_bot: bool = False):
             stars_col = "price_stars" if "price_stars" in cols else "0"
             act_cond = "AND is_active = 1" if "is_active" in cols else ""
             grp_val = "'Лицензия Бота'" if for_bot else "'VPN'"
-            sql = f"SELECT id, {grp_val}, name, days, price_rub, {stars_col} FROM tariffs WHERE is_bot = {target} {act_cond} ORDER BY price_rub ASC"
+            sql = f"SELECT id, {grp_val}, name, days, price_rub, {stars_col} FROM tariffs WHERE (is_bot = {target} OR (is_bot IS NULL AND {target} = 0)) {act_cond} ORDER BY price_rub ASC"
             return conn.execute(sql).fetchall()
     except Exception as e:
         import logging

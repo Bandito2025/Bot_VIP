@@ -331,8 +331,15 @@ async def handle_tariff_callback(update: Update, context: ContextTypes.DEFAULT_T
             except Exception:
                 pass
 
-        insert_cols = ["group_name", "name", "days", "price_rub", "price_stars", "is_active", "device_limit", "traffic_gb"]
-        vals = [group_name, name, days, price, stars, 1, devices, traffic]
+        if "is_bot" not in cols:
+            try:
+                cur.execute("ALTER TABLE tariffs ADD COLUMN is_bot INTEGER DEFAULT 0")
+                cols.append("is_bot")
+            except Exception:
+                pass
+
+        insert_cols = ["group_name", "name", "days", "price_rub", "price_stars", "is_active", "device_limit", "traffic_gb", "is_bot"]
+        vals = [group_name, name, days, price, stars, 1, devices, traffic, 0]
 
         cur.execute(
             f"INSERT INTO tariffs ({', '.join(insert_cols)}) VALUES ({', '.join(['?']*len(vals))})",

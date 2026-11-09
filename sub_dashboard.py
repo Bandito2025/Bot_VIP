@@ -3,8 +3,8 @@ import io
 import urllib.parse
 
 def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs_raw: str) -> str:
-    """Генерирует веб-дашборд подписки с вкладками ОС и ссылками на скачивание"""
-    # 1. QR-код
+    """Генерирует веб-дашборд подписки с расширенным набором программ для ПК, iOS и Android"""
+    # 1. Генерация QR-кода
     qr_b64 = ""
     try:
         import qrcode
@@ -18,7 +18,7 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
     except Exception:
         qr_b64 = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={urllib.parse.quote(sub_url)}"
 
-    # 2. Конфигурации
+    # 2. Конфигурации серверов
     cfg_lines = [l.strip() for l in configs_raw.strip().splitlines() if l.strip() and not l.strip().startswith("#")]
     cfg_count = len(cfg_lines)
 
@@ -49,7 +49,6 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
     status_text = user_info.get("status", "Неограниченно")
     last_online = user_info.get("last_online", "Недавно")
 
-    # Кодирование ссылки для некоторых схем (Shadowrocket / v2rayNG)
     b64_sub = base64.b64encode(sub_url.encode()).decode()
 
     return f"""<!DOCTYPE html>
@@ -60,12 +59,12 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
     <title>SVOII_VPN — Личный кабинет</title>
     <style>
         :root {{
-            --bg-color: #0d131f;
-            --card-bg: #141c2b;
-            --card-sub: #1b263b;
-            --border-color: #24324a;
+            --bg-color: #0b111e;
+            --card-bg: #141c2e;
+            --card-sub: #1a253a;
+            --border-color: #23314d;
             --text-main: #f8fafc;
-            --text-muted: #94a3b8;
+            --text-muted: #8e9fb5;
             --accent-blue: #2563eb;
             --accent-btn: #1d4ed8;
             --accent-green: #10b981;
@@ -73,7 +72,7 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
         }}
         * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
         body {{ background: var(--bg-color); color: var(--text-main); display: flex; justify-content: center; min-height: 100vh; padding: 24px 16px; }}
-        .wrapper {{ width: 100%; max-width: 780px; }}
+        .wrapper {{ width: 100%; max-width: 820px; }}
         
         .header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }}
         .user-block {{ display: flex; align-items: center; gap: 14px; }}
@@ -100,14 +99,13 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
         .stat-card .c-val {{ font-size: 15px; font-weight: 600; }}
         .badge-purple {{ display: inline-block; background: var(--accent-purple); color: #fff; font-size: 12px; padding: 2px 10px; border-radius: 6px; font-weight: 600; }}
         
-        /* Основные вкладки */
         .tabs {{ display: flex; gap: 12px; border-bottom: 1px solid var(--border-color); margin-bottom: 20px; padding-bottom: 8px; }}
         .tab-btn {{ background: none; border: none; color: var(--text-muted); font-size: 15px; font-weight: 600; padding: 8px 14px; cursor: pointer; border-radius: 8px; display: flex; align-items: center; gap: 8px; transition: 0.15s; }}
         .tab-btn.active {{ color: #fff; background: var(--card-sub); border-bottom: 2px solid var(--accent-blue); }}
         .tab-pane {{ display: none; }}
         .tab-pane.active {{ display: block; }}
         
-        /* Вкладка Подписка */
+        /* Вкладка 1: Подписка */
         .sub-box {{ background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; padding: 18px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }}
         .sub-badge {{ background: rgba(16, 185, 129, 0.15); color: var(--accent-green); font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 8px; }}
         .sub-content {{ flex: 1; min-width: 0; }}
@@ -120,7 +118,7 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
         .qr-text h3 {{ font-size: 16px; font-weight: 700; margin-bottom: 6px; }}
         .qr-text p {{ font-size: 13px; color: var(--text-muted); line-height: 1.5; }}
         
-        /* Подвкладки ОС (Android / iOS / Windows / macOS) */
+        /* Вкладка 2: Приложения и переключатели ОС */
         .os-selector {{ display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }}
         .os-btn {{ background: var(--card-bg); border: 1px solid var(--border-color); color: var(--text-muted); border-radius: 20px; padding: 7px 16px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: 0.15s; }}
         .os-btn.active {{ background: var(--card-sub); color: #fff; border-color: var(--accent-blue); }}
@@ -128,22 +126,18 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
         .os-pane.active {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
         @media (max-width: 640px) {{ .os-pane.active {{ grid-template-columns: 1fr; }} }}
         
-        /* Карточки приложений */
         .app-row {{ background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 14px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }}
         .app-meta {{ display: flex; align-items: center; gap: 12px; min-width: 0; }}
-        .app-logo {{ width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; flex-shrink: 0; }}
+        .app-logo {{ width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; flex-shrink: 0; }}
         .app-name-box {{ min-width: 0; }}
         .app-title {{ font-size: 14px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
         .app-dl-link {{ font-size: 11px; color: #60a5fa; text-decoration: none; display: inline-flex; align-items: center; gap: 2px; margin-top: 2px; }}
         .app-dl-link:hover {{ text-decoration: underline; }}
         
-        .app-btns {{ display: flex; align-items: center; gap: 6px; flex-shrink: 0; }}
-        .btn-add-primary {{ background: var(--accent-btn); color: #fff; text-decoration: none; font-size: 13px; font-weight: 600; padding: 7px 15px; border-radius: 8px; border: none; cursor: pointer; transition: 0.15s; }}
+        .btn-add-primary {{ background: var(--accent-btn); color: #fff; text-decoration: none; font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; transition: 0.15s; white-space: nowrap; }}
         .btn-add-primary:hover {{ background: #2563eb; }}
-        .btn-dl-icon {{ background: var(--card-sub); border: 1px solid var(--border-color); color: var(--text-muted); text-decoration: none; font-size: 13px; padding: 6px 10px; border-radius: 8px; display: flex; align-items: center; }}
-        .btn-dl-icon:hover {{ color: #fff; border-color: #475569; }}
         
-        /* Вкладка Конфиги */
+        /* Вкладка 3: Конфиги */
         .cfg-item {{ background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 12px; }}
         .cfg-info {{ display: flex; align-items: center; gap: 12px; min-width: 0; }}
         .badge-proto {{ background: var(--card-sub); border: 1px solid var(--border-color); font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; color: #93c5fd; }}
@@ -235,221 +229,75 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
                 <img src="{qr_b64}" class="qr-img" alt="QR Code">
                 <div class="qr-text">
                     <h3>Сканируйте телефоном</h3>
-                    <p>Отсканируйте этот код в приложении (Happ, v2rayTun, Hiddify, Streisand), чтобы добавить подписку без ручного копирования ссылки.</p>
+                    <p>Отсканируйте этот код в приложении (Happ, v2rayTun, Hiddify, Karing, Streisand) для мгновенного добавления всех серверов.</p>
                 </div>
             </div>
         </div>
 
-        <!-- 2. ПРИЛОЖЕНИЯ (С ПЕРЕКЛЮЧАТЕЛЯМИ ОС) -->
+        <!-- 2. ПРИЛОЖЕНИЯ -->
         <div id="main-apps" class="tab-pane">
             <div class="os-selector">
-                <button class="os-btn active" onclick="switchOS('android', this)">🤖 Android</button>
+                <button class="os-btn active" onclick="switchOS('windows', this)">💻 Windows / ПК</button>
+                <button class="os-btn" onclick="switchOS('android', this)">🤖 Android</button>
                 <button class="os-btn" onclick="switchOS('ios', this)">🍏 iOS</button>
-                <button class="os-btn" onclick="switchOS('windows', this)">💻 Windows / ПК</button>
                 <button class="os-btn" onclick="switchOS('macos', this)">🍎 macOS</button>
             </div>
 
-            <!-- ANDROID -->
-            <div id="os-android" class="os-pane active">
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#0f172a; border: 1px solid #38bdf8; color:#38bdf8;">V2</div>
-                        <div class="app-name-box">
-                            <div class="app-title">V2RayTun</div>
-                            <a href="https://play.google.com/store/apps/details?id=com.v2raytun.android" target="_blank" class="app-dl-link">Скачать ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="v2raytun://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#1e3a8a; color:#fff;">V</div>
-                        <div class="app-name-box">
-                            <div class="app-title">V2RayNG</div>
-                            <a href="https://github.com/2dust/v2rayNG/releases" target="_blank" class="app-dl-link">Скачать ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="v2rayng://install-config?url={sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-
+            <!-- 💻 WINDOWS / ПК -->
+            <div id="os-windows" class="os-pane active">
                 <div class="app-row">
                     <div class="app-meta">
                         <div class="app-logo" style="background:#0284c7; color:#fff;">H</div>
                         <div class="app-name-box">
-                            <div class="app-title">Happ</div>
-                            <a href="https://github.com/happ-proxy/happ-android/releases" target="_blank" class="app-dl-link">Скачать ↗</a>
+                            <div class="app-title">Happ (ПК / Windows)</div>
+                            <a href="https://github.com/happ-proxy/happ-desktop/releases/latest" target="_blank" class="app-dl-link">Скачать EXE / MSIX ↗</a>
                         </div>
                     </div>
-                    <div class="app-btns">
-                        <a href="happ://import/{sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
+                    <a href="happ://import/{sub_url}" class="btn-add-primary">Добавить</a>
                 </div>
 
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#0f172a; border: 1px solid #475569; color:#f8fafc;">V2</div>
-                        <div class="app-name-box">
-                            <div class="app-title">V2Box</div>
-                            <a href="https://play.google.com/store/apps/details?id=dev.hexasoftware.v2box" target="_blank" class="app-dl-link">Скачать ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="v2box://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#0369a1; color:#fff;">📦</div>
-                        <div class="app-name-box">
-                            <div class="app-title">Sing-box</div>
-                            <a href="https://github.com/SagerNet/sing-box/releases" target="_blank" class="app-dl-link">Скачать ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="sing-box://import-remote-profile?url={sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#064e3b; color:#34d399; font-size:11px;">INCY</div>
-                        <div class="app-name-box">
-                            <div class="app-title">Incy</div>
-                            <a href="https://play.google.com/store/apps/details?id=com.incy.vpn" target="_blank" class="app-dl-link">Скачать ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="incy://subscribe?url={sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-            </div>
-
-            <!-- IOS -->
-            <div id="os-ios" class="os-pane">
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#0284c7; color:#fff;">H</div>
-                        <div class="app-name-box">
-                            <div class="app-title">Happ</div>
-                            <a href="https://apps.apple.com/app/happ-proxy-utility/id6504287215" target="_blank" class="app-dl-link">App Store ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="happ://import/{sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#1e1b4b; border: 1px solid #a855f7; color:#c084fc;">🚀</div>
-                        <div class="app-name-box">
-                            <div class="app-title">Streisand</div>
-                            <a href="https://apps.apple.com/app/streisand/id6450534064" target="_blank" class="app-dl-link">App Store ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="streisand://import/{sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#0f172a; border: 1px solid #38bdf8; color:#38bdf8;">V2</div>
-                        <div class="app-name-box">
-                            <div class="app-title">V2RayTun</div>
-                            <a href="https://apps.apple.com/app/v2raytun/id6476628186" target="_blank" class="app-dl-link">App Store ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="v2raytun://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#0f172a; border: 1px solid #475569; color:#f8fafc;">V2</div>
-                        <div class="app-name-box">
-                            <div class="app-title">V2Box</div>
-                            <a href="https://apps.apple.com/app/v2box-v2ray-client/id6446814690" target="_blank" class="app-dl-link">App Store ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="v2box://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#3b82f6; color:#fff;">🚀</div>
-                        <div class="app-name-box">
-                            <div class="app-title">Shadowrocket</div>
-                            <a href="https://apps.apple.com/app/shadowrocket/id932747118" target="_blank" class="app-dl-link">App Store ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="sub://{b64_sub}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-
-                <div class="app-row">
-                    <div class="app-meta">
-                        <div class="app-logo" style="background:#064e3b; color:#34d399; font-size:11px;">INCY</div>
-                        <div class="app-name-box">
-                            <div class="app-title">Incy</div>
-                            <a href="https://apps.apple.com/app/incy/id6477755359" target="_blank" class="app-dl-link">App Store ↗</a>
-                        </div>
-                    </div>
-                    <div class="app-btns">
-                        <a href="incy://subscribe?url={sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
-                </div>
-            </div>
-
-            <!-- WINDOWS / ПК -->
-            <div id="os-windows" class="os-pane">
                 <div class="app-row">
                     <div class="app-meta">
                         <div class="app-logo" style="background:#0d9488; color:#fff;">🐰</div>
                         <div class="app-name-box">
-                            <div class="app-title">Hiddify</div>
-                            <a href="https://github.com/hiddify/hiddify-app/releases/latest" target="_blank" class="app-dl-link">Скачать EXE ↗</a>
+                            <div class="app-title">Hiddify (Windows)</div>
+                            <a href="https://github.com/hiddify/hiddify-app/releases/latest" target="_blank" class="app-dl-link">Скачать установщик ↗</a>
                         </div>
                     </div>
-                    <div class="app-btns">
-                        <a href="hiddify://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
+                    <a href="hiddify://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
                 </div>
 
                 <div class="app-row">
                     <div class="app-meta">
-                        <div class="app-logo" style="background:#2563eb; color:#fff;">v2N</div>
+                        <div class="app-logo" style="background:#4338ca; color:#fff;">K</div>
                         <div class="app-name-box">
-                            <div class="app-title">v2rayN</div>
+                            <div class="app-title">Karing (Windows)</div>
+                            <a href="https://github.com/KaringX/karing/releases/latest" target="_blank" class="app-dl-link">Скачать EXE / Store ↗</a>
+                        </div>
+                    </div>
+                    <a href="karing://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#1e3a8a; color:#fff;">v2N</div>
+                        <div class="app-name-box">
+                            <div class="app-title">v2rayN (Windows)</div>
                             <a href="https://github.com/2dust/v2rayN/releases/latest" target="_blank" class="app-dl-link">Скачать ZIP ↗</a>
                         </div>
                     </div>
-                    <div class="app-btns">
-                        <button class="btn-add-primary" onclick="navigator.clipboard.writeText('{sub_url}'); alert('Ссылка скопирована! Вставьте в v2rayN через Ctrl+V');">Копировать</button>
-                    </div>
+                    <button class="btn-add-primary" onclick="navigator.clipboard.writeText('{sub_url}'); alert('Ссылка скопирована! Вставьте в v2rayN через подписки.');">Копировать</button>
                 </div>
 
                 <div class="app-row">
                     <div class="app-meta">
                         <div class="app-logo" style="background:#3b82f6; color:#fff;">⚡</div>
                         <div class="app-name-box">
-                            <div class="app-title">FlClash</div>
+                            <div class="app-title">FlClash (Windows)</div>
                             <a href="https://github.com/chen08209/FlClash/releases/latest" target="_blank" class="app-dl-link">Скачать EXE ↗</a>
                         </div>
                     </div>
-                    <div class="app-btns">
-                        <a href="clash://install-config?url={sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
+                    <a href="clash://install-config?url={sub_url}" class="btn-add-primary">Добавить</a>
                 </div>
 
                 <div class="app-row">
@@ -460,13 +308,193 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
                             <a href="https://github.com/MatsuriDayo/nekoray/releases/latest" target="_blank" class="app-dl-link">Скачать ZIP ↗</a>
                         </div>
                     </div>
-                    <div class="app-btns">
-                        <button class="btn-add-primary" onclick="navigator.clipboard.writeText('{sub_url}'); alert('Ссылка скопирована! Вставьте в NekoBox: Программа -> Добавить из буфера');">Копировать</button>
-                    </div>
+                    <button class="btn-add-primary" onclick="navigator.clipboard.writeText('{sub_url}'); alert('Ссылка скопирована! Вставьте в NekoBox из буфера.');">Копировать</button>
                 </div>
             </div>
 
-            <!-- MACOS -->
+            <!-- 🤖 ANDROID -->
+            <div id="os-android" class="os-pane">
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#0284c7; color:#fff;">H</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Happ</div>
+                            <a href="https://github.com/happ-proxy/happ-android/releases/latest" target="_blank" class="app-dl-link">Скачать APK ↗</a>
+                        </div>
+                    </div>
+                    <a href="happ://import/{sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#0f172a; border: 1px solid #38bdf8; color:#38bdf8;">V2</div>
+                        <div class="app-name-box">
+                            <div class="app-title">V2RayTun</div>
+                            <a href="https://play.google.com/store/apps/details?id=com.v2raytun.android" target="_blank" class="app-dl-link">Google Play ↗</a>
+                        </div>
+                    </div>
+                    <a href="v2raytun://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#1e3a8a; color:#fff;">V</div>
+                        <div class="app-name-box">
+                            <div class="app-title">V2RayNG</div>
+                            <a href="https://github.com/2dust/v2rayNG/releases/latest" target="_blank" class="app-dl-link">Скачать APK ↗</a>
+                        </div>
+                    </div>
+                    <a href="v2rayng://install-config?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#4338ca; color:#fff;">K</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Karing</div>
+                            <a href="https://play.google.com/store/apps/details?id=com.karing.app" target="_blank" class="app-dl-link">Google Play ↗</a>
+                        </div>
+                    </div>
+                    <a href="karing://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#0d9488; color:#fff;">🐰</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Hiddify</div>
+                            <a href="https://play.google.com/store/apps/details?id=app.hiddify.com" target="_blank" class="app-dl-link">Google Play ↗</a>
+                        </div>
+                    </div>
+                    <a href="hiddify://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#0369a1; color:#fff;">📦</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Sing-box</div>
+                            <a href="https://github.com/SagerNet/sing-box/releases/latest" target="_blank" class="app-dl-link">GitHub APK ↗</a>
+                        </div>
+                    </div>
+                    <a href="sing-box://import-remote-profile?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#0f172a; border: 1px solid #475569; color:#f8fafc;">V2</div>
+                        <div class="app-name-box">
+                            <div class="app-title">V2Box</div>
+                            <a href="https://play.google.com/store/apps/details?id=dev.hexasoftware.v2box" target="_blank" class="app-dl-link">Google Play ↗</a>
+                        </div>
+                    </div>
+                    <a href="v2box://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#064e3b; color:#34d399; font-size:11px;">INCY</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Incy</div>
+                            <a href="https://play.google.com/store/apps/details?id=com.incy.vpn" target="_blank" class="app-dl-link">Google Play ↗</a>
+                        </div>
+                    </div>
+                    <a href="incy://subscribe?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+            </div>
+
+            <!-- 🍏 IOS -->
+            <div id="os-ios" class="os-pane">
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#0284c7; color:#fff;">H</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Happ</div>
+                            <a href="https://apps.apple.com/app/happ-proxy-utility/id6504287215" target="_blank" class="app-dl-link">App Store ↗</a>
+                        </div>
+                    </div>
+                    <a href="happ://import/{sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#1e1b4b; border: 1px solid #a855f7; color:#c084fc;">🚀</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Streisand</div>
+                            <a href="https://apps.apple.com/app/streisand/id6450534064" target="_blank" class="app-dl-link">App Store ↗</a>
+                        </div>
+                    </div>
+                    <a href="streisand://import/{sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#0f172a; border: 1px solid #38bdf8; color:#38bdf8;">V2</div>
+                        <div class="app-name-box">
+                            <div class="app-title">V2RayTun</div>
+                            <a href="https://apps.apple.com/app/v2raytun/id6476628186" target="_blank" class="app-dl-link">App Store ↗</a>
+                        </div>
+                    </div>
+                    <a href="v2raytun://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#4338ca; color:#fff;">K</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Karing</div>
+                            <a href="https://apps.apple.com/app/karing/id6472431552" target="_blank" class="app-dl-link">App Store ↗</a>
+                        </div>
+                    </div>
+                    <a href="karing://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#b45309; color:#fff;">🦊</div>
+                        <div class="app-name-box">
+                            <div class="app-title">FoXray</div>
+                            <a href="https://apps.apple.com/app/foxray/id6448898396" target="_blank" class="app-dl-link">App Store ↗</a>
+                        </div>
+                    </div>
+                    <button class="btn-add-primary" onclick="navigator.clipboard.writeText('{sub_url}'); alert('Ссылка скопирована! Вставьте в FoXray через кнопку +');">Копировать</button>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#3b82f6; color:#fff;">🚀</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Shadowrocket</div>
+                            <a href="https://apps.apple.com/app/shadowrocket/id932747118" target="_blank" class="app-dl-link">App Store ↗</a>
+                        </div>
+                    </div>
+                    <a href="sub://{b64_sub}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#0f172a; border: 1px solid #475569; color:#f8fafc;">V2</div>
+                        <div class="app-name-box">
+                            <div class="app-title">V2Box</div>
+                            <a href="https://apps.apple.com/app/v2box-v2ray-client/id6446814690" target="_blank" class="app-dl-link">App Store ↗</a>
+                        </div>
+                    </div>
+                    <a href="v2box://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#064e3b; color:#34d399; font-size:11px;">INCY</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Incy</div>
+                            <a href="https://apps.apple.com/app/incy/id6477755359" target="_blank" class="app-dl-link">App Store ↗</a>
+                        </div>
+                    </div>
+                    <a href="incy://subscribe?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+            </div>
+
+            <!-- 🍎 MACOS -->
             <div id="os-macos" class="os-pane">
                 <div class="app-row">
                     <div class="app-meta">
@@ -476,9 +504,7 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
                             <a href="https://apps.apple.com/app/happ-proxy-utility/id6504287215" target="_blank" class="app-dl-link">Mac App Store ↗</a>
                         </div>
                     </div>
-                    <div class="app-btns">
-                        <a href="happ://import/{sub_url}" class="btn-add-primary">Добавить</a>
-                    </div>
+                    <a href="happ://import/{sub_url}" class="btn-add-primary">Добавить</a>
                 </div>
 
                 <div class="app-row">
@@ -489,9 +515,18 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
                             <a href="https://github.com/hiddify/hiddify-app/releases/latest" target="_blank" class="app-dl-link">Скачать DMG ↗</a>
                         </div>
                     </div>
-                    <div class="app-btns">
-                        <a href="hiddify://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                    <a href="hiddify://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#4338ca; color:#fff;">K</div>
+                        <div class="app-name-box">
+                            <div class="app-title">Karing (macOS)</div>
+                            <a href="https://apps.apple.com/app/karing/id6472431552" target="_blank" class="app-dl-link">Mac App Store ↗</a>
+                        </div>
                     </div>
+                    <a href="karing://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
                 </div>
 
                 <div class="app-row">
@@ -502,9 +537,29 @@ def build_sub_dashboard_html(sub_url: str, sub_id: str, user_info: dict, configs
                             <a href="https://apps.apple.com/app/v2raytun/id6476628186" target="_blank" class="app-dl-link">Mac App Store ↗</a>
                         </div>
                     </div>
-                    <div class="app-btns">
-                        <a href="v2raytun://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                    <a href="v2raytun://install-sub?url={sub_url}" class="btn-add-primary">Добавить</a>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#b45309; color:#fff;">🦊</div>
+                        <div class="app-name-box">
+                            <div class="app-title">FoXray (macOS)</div>
+                            <a href="https://apps.apple.com/app/foxray/id6448898396" target="_blank" class="app-dl-link">Mac App Store ↗</a>
+                        </div>
                     </div>
+                    <button class="btn-add-primary" onclick="navigator.clipboard.writeText('{sub_url}'); alert('Ссылка скопирована!');">Копировать</button>
+                </div>
+
+                <div class="app-row">
+                    <div class="app-meta">
+                        <div class="app-logo" style="background:#3b82f6; color:#fff;">⚡</div>
+                        <div class="app-name-box">
+                            <div class="app-title">FlClash (macOS)</div>
+                            <a href="https://github.com/chen08209/FlClash/releases/latest" target="_blank" class="app-dl-link">Скачать DMG ↗</a>
+                        </div>
+                    </div>
+                    <a href="clash://install-config?url={sub_url}" class="btn-add-primary">Добавить</a>
                 </div>
             </div>
         </div>

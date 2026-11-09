@@ -1,3 +1,56 @@
+def auto_heal_empty_servers(conn):
+    """Аварийное самовосстановление: если таблица серверов пуста, восстанавливает ноды из последнего бэкапа"""
+    try:
+        cnt = conn.execute("SELECT COUNT(*) FROM servers").fetchone()[0]
+        if cnt > 0:
+            return  # Серверы на месте, восстановление не требуется
+
+        import glob, os, sqlite3, logging
+        log = logging.getLogger("Bot_VIP")
+        log.warning("⚠️ Внимание: Таблица servers пуста! Запуск автоматического самоисцеления...")
+
+        backup_files = sorted(
+            glob.glob("/opt/Bot_VIP/backup/*/bot_data.db") + glob.glob("backup/*/bot_data.db"),
+            key=os.path.getmtime,
+            reverse=True
+        )
+
+        for b_path in backup_files:
+            try:
+                b_conn = sqlite3.connect(b_path)
+                t_exists = b_conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='servers'").fetchone()
+                if not t_exists:
+                    b_conn.close()
+                    continue
+
+                b_rows = b_conn.execute("SELECT * FROM servers").fetchall()
+                b_cols = [c[1] for c in b_conn.execute("PRAGMA table_info(servers)").fetchall()]
+                b_conn.close()
+
+                if b_rows:
+                    m_cols = [c[1] for c in conn.execute("PRAGMA table_info(servers)").fetchall()]
+                    common = [c for c in b_cols if c in m_cols]
+                    if not common:
+                        continue
+
+                    col_str = ", ".join(common)
+                    ph_str = ", ".join(["?"] * len(common))
+
+                    for r in b_rows:
+                        row_dict = dict(zip(b_cols, r))
+                        vals = [row_dict[c] for c in common]
+                        if "is_active" in common:
+                            vals[common.index("is_active")] = 1
+                        conn.execute(f"INSERT OR REPLACE INTO servers ({col_str}) VALUES ({ph_str})", vals)
+
+                    conn.commit()
+                    log.info(f"✅ Самоисцеление успешно! Восстановлено серверов: {len(b_rows)} из архива {b_path}")
+                    break
+            except Exception as be:
+                continue
+    except Exception:
+        pass
+
 def get_update_info():
     import subprocess
     try:

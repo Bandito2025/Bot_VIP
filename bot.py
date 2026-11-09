@@ -1,3 +1,6 @@
+def is_pro_version() -> bool:
+    return True
+
 from backup_manager import auto_heal_empty_servers, restore_database_from_best_backup
 def auto_heal_empty_servers(conn):
     """Аварийное самовосстановление: если таблица серверов пуста, восстанавливает ноды из последнего бэкапа"""

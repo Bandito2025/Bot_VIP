@@ -1,3 +1,4 @@
+from sub_dashboard import build_sub_dashboard_html
 
 def auto_migrate_db(db_path=None):
     """Автоматическая миграция: проверяет и добавляет отсутствующие колонки во все таблицы"""

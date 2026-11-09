@@ -5891,7 +5891,25 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
     uid, uname, fname, joined, is_vip, is_ban, until, attempts, vpn_cfg, bot_lic, srv_id, sub_id, c_uuid, trial_u, has_exp, bot_blk, ref_by, ref_cnt, ref_days, disc_pct = info
 
     with sqlite3.connect(DB_PATH) as conn:
-        u_extra = conn.execute("SELECT COALESCE(balance, 0), COALESCE(ref_coeff, 1.0) FROM users WHERE user_id = ?", (uid,)).fetchone()
+        try:
+
+            u_extra = conn.execute("SELECT COALESCE(balance, 0), COALESCE(ref_coeff, 1.0) FROM users WHERE user_id = ?", (uid,)).fetchone()
+
+        except Exception:
+
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+
+            if "balance" not in cols:
+
+                conn.execute("ALTER TABLE users ADD COLUMN balance REAL DEFAULT 0")
+
+            if "ref_coeff" not in cols:
+
+                conn.execute("ALTER TABLE users ADD COLUMN ref_coeff REAL DEFAULT 1.0")
+
+            conn.commit()
+
+            u_extra = (0, 1.0)
         balance, ref_coeff = (int(u_extra[0]), float(u_extra[1])) if u_extra else (0, 1.0)
 
         pay_row = conn.execute("SELECT COUNT(*), MAX(created_at) FROM payments WHERE user_id = ?", (uid,)).fetchone()

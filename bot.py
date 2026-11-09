@@ -398,6 +398,36 @@ def format_bytes(size_bytes: int) -> str:
     return f"{gb:.2f} GB"
 
 # --- База данных SQLite ---
+
+def auto_migrate_user_keys(conn):
+    """Автоматическое добавление недостающих колонок в user_keys при обновлении версий"""
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='user_keys'")
+        if cur.fetchone()[0] == 0:
+            return
+
+        existing_cols = [c[1] for c in cur.execute("PRAGMA table_info(user_keys)").fetchall()]
+        required_cols = {
+            "group_name": "TEXT DEFAULT ''",
+            "server_id": "INTEGER DEFAULT NULL",
+            "location_name": "TEXT DEFAULT ''",
+            "limit_gb": "REAL DEFAULT 0",
+            "limit_ip": "INTEGER DEFAULT 1",
+            "history_log": "TEXT DEFAULT ''"
+        }
+
+        for col, col_type in required_cols.items():
+            if col not in existing_cols:
+                cur.execute(f"ALTER TABLE user_keys ADD COLUMN {col} {col_type}")
+                print(f"✅ Миграция: добавлена колонка {col} в таблицу user_keys")
+
+        conn.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger("Bot_VIP").error(f"Ошибка миграции user_keys: {e}")
+
+
 def init_db():
     os.makedirs(EXTENSIONS_DIR, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:

@@ -853,7 +853,7 @@ def start_sub_aggregator_server():
                                         self.send_header("Content-Type", "text/plain; charset=utf-8")
                                         self.end_headers()
                                         warn_node = "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:443?encryption=none&type=tcp#%E2%9B%94%20%D0%9B%D0%B8%D0%BC%D0%B8%D1%82%20%D1%83%D1%81%D1%82%D1%80%D0%BE%D0%B9%D1%81%D1%82%D0%B2%20%D0%B8%D1%81%D1%87%D0%B5%D1%80%D0%BF%D0%B0%D0%BD!%20%D0%A1%D0%B1%D1%80%D0%BE%D1%81%D1%8C%D1%82%D0%B5%20%D0%B2%20%D0%B1%D0%BE%D1%82%D0%B5%20(20%E2%82%BD)"
-                                        import base64
+                                        # clean import
                                         self.wfile.write(base64.b64encode(warn_node.encode("utf-8")))
                                         return
                                     else:

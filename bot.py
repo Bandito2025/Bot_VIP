@@ -1,3 +1,4 @@
+from backup_manager import auto_heal_empty_servers, restore_database_from_best_backup
 def auto_heal_empty_servers(conn):
     """Аварийное самовосстановление: если таблица серверов пуста, восстанавливает ноды из последнего бэкапа"""
     try:
@@ -3805,6 +3806,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔄 Мягкое обновление с GitHub (git pull)", callback_data="admin_update")],
             [InlineKeyboardButton("⚠️ Жёсткая перезапись с GitHub (git reset)", callback_data="admin_hard_reset")],
             [InlineKeyboardButton("⚡ Перезапустить бота сейчас", callback_data="admin_restart")],
+            [InlineKeyboardButton("♻️ Восстановить серверы и БД из бэкапа", callback_data="admin_restore_backup")],
             [
                 InlineKeyboardButton("⬅️ Назад", callback_data="admin_settings_menu"),
                 InlineKeyboardButton("🈴 На главную", callback_data="admin_back_main")
@@ -4984,6 +4986,17 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(LOG_PATH):
             with open(LOG_PATH, "rb") as f:
                 await query.message.reply_document(document=f, filename="bot.log", caption="📜 Системный лог (bot.log)")
+    if data == "admin_restore_backup":
+        await query.answer("Запуск восстановления...")
+        await query.edit_message_text("⏳ <i>Сканирую архивы и восстанавливаю базу...</i>", parse_mode="HTML")
+        ok, res_text = restore_database_from_best_backup()
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🌐 К серверам", callback_data="admin_servers")],
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="admin_bset_updates")]
+        ])
+        await query.message.reply_text(res_text, parse_mode="HTML", reply_markup=kb)
+        return
+
     elif data == "admin_restart":
         await query.edit_message_text("⚡ <b>Перезапуск службы бота...</b>", parse_mode="HTML")
         if sys.platform.startswith("linux") and os.path.exists("/etc/systemd/system/bot_vip.service"):

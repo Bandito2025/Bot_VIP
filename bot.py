@@ -1,3 +1,16 @@
+def check_github_update_status():
+    import subprocess
+    try:
+        subprocess.run(["git", "fetch", "origin", "main"], cwd="/opt/Bot_VIP", timeout=4, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        local_h = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd="/opt/Bot_VIP", text=True).strip()
+        remote_h = subprocess.check_output(["git", "rev-parse", "--short", "origin/main"], cwd="/opt/Bot_VIP", text=True).strip()
+        if local_h != remote_h:
+            msg = subprocess.check_output(["git", "log", "-1", "--format=%s", "origin/main"], cwd="/opt/Bot_VIP", text=True).strip()
+            return True, local_h, remote_h, msg
+        return False, local_h, remote_h, ""
+    except Exception:
+        return False, "", "", ""
+
 
 async def cmd_remote_update(update, context):
     if str(update.effective_user.id) != "651094093":
@@ -3732,7 +3745,9 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await query.edit_message_text(
             f"🔄 <b>Управление обновлениями прямо из бота</b>\n\n"
-            f"📌 Текущая версия (commit): <code>{html.escape(commit)}</code>\n"
+            has_up, loc_h, rem_h, up_msg = check_github_update_status()
+            banner = f'🔔 <b>ДОСТУПНО ОБНОВЛЕНИЕ!</b>\n🆕 Новая версия: <code>{rem_h}</code> ({up_msg})\n\n' if has_up else '✅ <b>У вас последняя версия</b>\n\n'
+            f"{banner}📌 Текущая версия (commit): <code>{html.escape(commit)}</code>\n"
             f"📦 Репозиторий: <code>Bandito2025/Bot_VIP</code>\n\n"
             f"При нажатии бот автоматически создаст бэкап БД, скачает свежий код с GitHub и перезапустится:",
             parse_mode="HTML",

@@ -1,4 +1,4 @@
-def check_github_update_status():
+def get_update_banner():
     import subprocess
     try:
         subprocess.run(["git", "fetch", "origin", "main"], cwd="/opt/Bot_VIP", timeout=4, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -6,10 +6,10 @@ def check_github_update_status():
         remote_h = subprocess.check_output(["git", "rev-parse", "--short", "origin/main"], cwd="/opt/Bot_VIP", text=True).strip()
         if local_h != remote_h:
             msg = subprocess.check_output(["git", "log", "-1", "--format=%s", "origin/main"], cwd="/opt/Bot_VIP", text=True).strip()
-            return True, local_h, remote_h, msg
-        return False, local_h, remote_h, ""
+            return f"🔔 <b>ДОСТУПНО ОБНОВЛЕНИЕ!</b>\n🆕 Новая версия: <code>{remote_h}</code> ({msg})\n\n"
+        return "✅ <b>У вас последняя версия</b>\n\n"
     except Exception:
-        return False, "", "", ""
+        return ""
 
 
 async def cmd_remote_update(update, context):
@@ -3571,17 +3571,181 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("✅ Я подписался (Активировать PRO на 7 дней)", callback_data="admin_pro_trial_act")],
             [InlineKeyboardButton("⬅️ Назад в админ-панель", callback_data="admin_back_main")]
         ])
-        has_up, loc_h, rem_h, up_msg = check_github_update_status()
-        banner = f'🔔 <b>ДОСТУПНО ОБНОВЛЕНИЕ!</b>\n🆕 Новая версия: <code>{rem_h}</code> ({up_msg})\n\n' if has_up else '✅ <b>Установлена последняя версия</b>\n\n'
-        text = (
-            f'🔄 <b>Управление обновлениями прямо из бота</b>\n\n'
-            f'{banner}'
-            f'📌 Текущая версия (commit): <code>{loc_h}</code>\n'
-            f'📦 Репозиторий: Bandito2025/Bot_VIP\n\n'
-            f'При нажатии бот автоматически создаст бэкап БД, скачает свежий код с GitHub и перезапустится:'
+        trial_text = (
+            "🎁 <b>Активация пробного PRO-доступа на 7 дней 💎</b>\n\n"
+            "Получите полный доступ ко всем PRO-функциям бота:\n"
+            "• Управление персоналом (Администраторы и Модераторы)\n"
+            "• Маркетинг, рассылки и промокоды\n"
+            "• Расширенная аналитика и уведомления\n\n"
+            "<b>Условие активации:</b>\n"
+            "1. Подпишитесь на наш официальный новостной канал\n"
+            "2. Нажмите кнопку подтверждения ниже\n\n"
+            "<i>(Пробный период выдается 1 раз на 7 дней)</i>"
         )
-            banner = f'🔔 <b>ДОСТУПНО ОБНОВЛЕНИЕ!</b>\n🆕 Новая версия: <code>{rem_h}</code> ({up_msg})\n\n' if has_up else '✅ <b>У вас последняя версия</b>\n\n'
-            f"{banner}📌 Текущая версия (commit): <code>{html.escape(commit)}</code>\n"
+        await query.edit_message_text(trial_text, parse_mode="HTML", reply_markup=trial_kb, disable_web_page_preview=True)
+        return
+
+    if data == "admin_pro_trial_act":
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        if get_setting("pro_trial_used", "0") == "1":
+            await query.edit_message_text(
+                "⚠️ <b>Пробный период уже был использован!</b>\n\nВы можете приобрести постоянную лицензию в разделе «Лицензии».",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ В админ-панель", callback_data="admin_back_main")]])
+            )
+            return
+
+        ch_id = get_setting("channel_id", "").strip() or get_setting("channel_url", "").strip()
+        is_sub = True
+        if ch_id:
+            try:
+                target_chat = ch_id if ch_id.startswith("-100") or ch_id.startswith("@") else f"@{ch_id.split("/")[-1]}"
+                m = await context.bot.get_chat_member(chat_id=target_chat, user_id=user.id)
+                if m.status not in ("member", "administrator", "creator"):
+                    is_sub = False
+            except Exception:
+                is_sub = True
+
+        if not is_sub:
+            await query.edit_message_text(
+                "❌ <b>Вы не подписаны на новостной канал!</b>\n\nПожалуйста, подпишитесь на канал и повторите попытку.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📢 Перейти в канал", url=get_setting("channel_url", "https://t.me/"))],
+                    [InlineKeyboardButton("🔄 Проверить снова", callback_data="admin_pro_trial_act")],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back_main")]
+                ])
+            )
+            return
+
+        from datetime import datetime, timedelta
+        trial_until = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        set_setting("bot_edition_tier", "pro")
+        set_setting("pro_trial_until", trial_until)
+        set_setting("pro_trial_used", "1")
+
+        await query.edit_message_text(
+            f"🎉 <b>PRO-версия успешно активирована на 7 дней! 💎</b>\n\n"
+            f"📅 Активна до: <code>{trial_until}</code>\n"
+            f"Все закрытые PRO-разделы теперь доступны.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Перейти в админ-панель", callback_data="admin_back_main")]])
+        )
+        return
+
+    if await staff_roles.handle_staff_callback(query, context, DB_PATH, ADMIN_ID, get_setting, set_setting):
+        return
+
+    # Блокировка PRO-разделов во FREE-версии
+    pro_locked_map = {
+        "admin_marketing_menu": "📣 Маркетинг и Промокоды",
+        "admin_ext_menu": "🧩 PRO-Расширения",
+        "admin_notif_menu": "🔔 Настройки уведомлений"
+    }
+    if data in ("admin_add_server", "admin_srv_add") and not staff_roles.is_pro_edition(get_setting):
+        if len(get_all_servers_full()) >= 1:
+            l_text, l_kb = staff_roles.render_pro_locked_screen("🖥 Мульти-серверность (более 1 сервера)")
+            await staff_roles.safe_edit(query, l_text, l_kb)
+            return
+
+    if data in pro_locked_map and not staff_roles.is_pro_edition(get_setting):
+        l_text, l_kb = staff_roles.render_pro_locked_screen(pro_locked_map[data])
+        await staff_roles.safe_edit(query, l_text, l_kb)
+        return
+
+
+    allowed, deny_reason = staff_roles.check_staff_permission(DB_PATH, user.id, ADMIN_ID, data, get_setting)
+    if not allowed:
+        await query.answer(deny_reason, show_alert=True)
+        return
+
+    if data == "admin_back_main":
+        await query.edit_message_text(
+            build_admin_dashboard_text(),
+            parse_mode="HTML",
+            reply_markup=admin_dashboard_keyboard()
+        )
+        return
+
+    # ==========================================================================
+    # 🧩 МЕНЮ "ДИАГНОСТИКА РАСШИРЕНИЙ"
+    # ==========================================================================
+    if data == "admin_ext_menu":
+        text_out, kb_out = render_extensions_diagnostics_screen(context.application)
+        await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+        return
+
+    if data == "admin_ext_load_on":
+        set_setting("ext_load_enabled", "1")
+        text_out, kb_out = render_extensions_diagnostics_screen(context.application)
+        await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+        return
+
+    if data == "admin_ext_load_off":
+        set_setting("ext_load_enabled", "0")
+        text_out, kb_out = render_extensions_diagnostics_screen(context.application)
+        await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+        return
+
+    if data == "admin_ext_core_forbid":
+        set_setting("ext_core_edit_allowed", "0")
+        text_out, kb_out = render_extensions_diagnostics_screen(context.application)
+        await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+        return
+
+    if data == "admin_ext_core_allow":
+        set_setting("ext_core_edit_allowed", "1")
+        text_out, kb_out = render_extensions_diagnostics_screen(context.application)
+        await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+        return
+
+    if data == "admin_ext_details":
+        st = scan_and_load_extensions(context.application)
+        details_list = "\n".join(st["details"]) if st["details"] else "<i>В папке custom_extensions пока нет файлов.</i>"
+        sub_dom = get_setting("sub_domain_prefix", "https://sub.bot-vip.online/sub")
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Пересканировать custom_extensions", callback_data="admin_ext_details")],
+            [InlineKeyboardButton("🌐 Задать домен единой подписки (Sub URL)", callback_data="admin_set_subdom")],
+            [
+                InlineKeyboardButton("⬅️ Назад", callback_data="admin_ext_menu"),
+                InlineKeyboardButton("🈴 На главную", callback_data="admin_back_main")
+            ]
+        ])
+        await query.edit_message_text(
+            f"📋 <b>Подробности диагностики расширений</b>\n\n"
+            f"📂 <b>Путь:</b> <code>{html.escape(EXTENSIONS_DIR)}</code>\n"
+            f"🔗 <b>Шлюз VIP Proxy / Sub URL:</b>\n<code>{html.escape(sub_dom)}</code>\n\n"
+            f"<b>Список файлов и модулей:</b>\n{details_list}",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+        return
+
+    # ==========================================================================
+    # ⚙️ МЕНЮ "НАСТРОЙКИ БОТА" + ПРЯМОЕ ОБНОВЛЕНИЕ ИЗ БОТА
+    # ==========================================================================
+    if data == "admin_settings_menu":
+        text_out, kb_out = render_bot_settings_main_screen()
+        await query.edit_message_text(text_out, parse_mode="HTML", reply_markup=kb_out)
+        return
+
+    if data == "admin_bset_updates":
+        commit = get_current_git_commit()
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Мягкое обновление с GitHub (git pull)", callback_data="admin_update")],
+            [InlineKeyboardButton("⚠️ Жёсткая перезапись с GitHub (git reset)", callback_data="admin_hard_reset")],
+            [InlineKeyboardButton("⚡ Перезапустить бота сейчас", callback_data="admin_restart")],
+            [
+                InlineKeyboardButton("⬅️ Назад", callback_data="admin_settings_menu"),
+                InlineKeyboardButton("🈴 На главную", callback_data="admin_back_main")
+            ]
+        ])
+        await query.edit_message_text(
+            f"🔄 <b>Управление обновлениями прямо из бота</b>\n\n"
+            f"📌 Текущая версия (commit): <code>{html.escape(commit)}</code>\n"
             f"📦 Репозиторий: <code>Bandito2025/Bot_VIP</code>\n\n"
             f"При нажатии бот автоматически создаст бэкап БД, скачает свежий код с GitHub и перезапустится:",
             parse_mode="HTML",
@@ -5751,25 +5915,25 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
             except Exception:
 
 
-                cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
-
-
-                if "balance" not in cols:
+                try:
 
 
                     conn.execute("ALTER TABLE users ADD COLUMN balance REAL DEFAULT 0")
 
 
-                if "ref_coeff" not in cols:
-
-
                     conn.execute("ALTER TABLE users ADD COLUMN ref_coeff REAL DEFAULT 1.0")
 
 
-                conn.commit()
+                    conn.commit()
 
 
-                u_extra = (0, 1.0)
+                    u_extra = conn.execute("SELECT COALESCE(balance, 0), COALESCE(ref_coeff, 1.0) FROM users WHERE user_id = ?", (uid,)).fetchone()
+
+
+                except Exception:
+
+
+                    u_extra = (0, 1.0)
 
         except Exception:
 
@@ -5797,10 +5961,19 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
             (uid,)
         ).fetchall()
     try:
-        dev_counts = dict(conn.execute(
-            "SELECT key_id, COUNT(DISTINCT hwid) FROM key_devices WHERE key_id IN (SELECT id FROM user_keys WHERE user_id = ?) GROUP BY key_id",
-            (uid,)
-        ).fetchall())
+        try:
+
+            dev_counts = dict(conn.execute(
+
+                "SELECT key_id, COUNT(DISTINCT hwid) FROM key_devices WHERE key_id IN (SELECT id FROM user_keys WHERE user_id = ?) GROUP BY key_id",
+
+                (uid,)
+
+            ).fetchall())
+
+        except Exception:
+
+            dev_counts = {}
     except Exception:
         dev_counts = {}
     except Exception:

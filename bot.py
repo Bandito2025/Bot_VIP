@@ -880,19 +880,76 @@ def start_sub_aggregator_server():
                         if is_browser and "format=raw" not in self.path and "raw=1" not in self.path and build_sub_dashboard_html:
                             try:
                                 sub_full_url = f"https://sub.svoii-vpn.online/sub/{sub_id}"
-                                u_info = {"name": f"user_{sub_id[:8]}", "total_gb": "0.00", "up_gb": "0.00", "down_gb": "0.00", "limit_gb": "Неограниченно", "days_left": "∞", "expire_str": "Бессрочно", "status": "Активен", "last_online": "Сегодня"}
+                                from datetime import datetime
+                                
+                                u_info = {
+                                    "name": f"user_{sub_id[:8]}",
+                                    "total_gb": "0.00",
+                                    "up_gb": "0.00",
+                                    "down_gb": "0.00",
+                                    "limit_gb": "Неограниченно",
+                                    "days_left": "∞",
+                                    "expire_str": "Бессрочно",
+                                    "status": "Активен",
+                                    "last_online": "Не подключался"
+                                }
+                                
                                 try:
                                     with sqlite3.connect(DB_PATH) as _dbc:
-                                        _kr = _dbc.execute("SELECT user_id, limit_gb, expires_at FROM user_keys WHERE sub_id = ?", (sub_id,)).fetchone()
-                                        if _kr and _kr[0]:
-                                            _ur = _dbc.execute("SELECT username, first_name, traffic_used, vip_expires FROM users WHERE user_id = ?", (_kr[0],)).fetchone()
-                                            if _ur:
-                                                u_info["name"] = str(_ur[0] or _ur[1] or _kr[0])
-                                                if _ur[2]:
-                                                    u_info["total_gb"] = f"{float(_ur[2])/1024/1024/1024:.2f}"
-                                                if _ur[3]:
-                                                    u_info["expire_str"] = str(_ur[3])[:10]
-                                                    u_info["days_left"] = "Активен"
+                                        _dbc.row_factory = sqlite3.Row
+                                        _k = _dbc.execute("SELECT * FROM user_keys WHERE sub_id = ?", (sub_id,)).fetchone()
+                                        if _k:
+                                            # 1. Точный расчёт таймера и даты окончания
+                                            exp_raw = _k["expires_at"]
+                                            if exp_raw:
+                                                try:
+                                                    exp_str = str(exp_raw).split('.')[0]
+                                                    fmt = "%Y-%m-%d %H:%M:%S" if " " in exp_str else "%Y-%m-%d"
+                                                    exp_dt = datetime.strptime(exp_str, fmt)
+                                                    now = datetime.now()
+                                                    delta = exp_dt - now
+                                                    if delta.total_seconds() > 0:
+                                                        days = delta.days
+                                                        if days > 0:
+                                                            u_info["days_left"] = f"{days} дн."
+                                                        else:
+                                                            hrs = max(1, int(delta.total_seconds() // 3600))
+                                                            u_info["days_left"] = f"{hrs} ч."
+                                                        u_info["status"] = "Активен"
+                                                    else:
+                                                        u_info["days_left"] = "Истёк"
+                                                        u_info["status"] = "Истёк"
+                                                    u_info["expire_str"] = exp_dt.strftime("%d.%m.%Y, %H:%M")
+                                                except Exception:
+                                                    u_info["expire_str"] = str(exp_raw)[:16]
+
+                                            # 2. Лимит трафика
+                                            l_gb = _k["limit_gb"] if "limit_gb" in _k.keys() else 0
+                                            if l_gb and float(l_gb) > 0:
+                                                u_info["limit_gb"] = f"{float(l_gb):.2f} GB"
+                                            else:
+                                                u_info["limit_gb"] = "Без лимита"
+
+                                            # 3. Данные о подключении и активности ("Был в сети")
+                                            # Проверяем записи устройств
+                                            t_dev = _dbc.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='key_devices'").fetchone()[0]
+                                            if t_dev > 0:
+                                                dev_cols = [c[1] for c in _dbc.execute("PRAGMA table_info(key_devices)").fetchall()]
+                                                time_col = "created_at" if "created_at" in dev_cols else ("last_seen" if "last_seen" in dev_cols else None)
+                                                if time_col:
+                                                    d_row = _dbc.execute(f"SELECT {time_col} FROM key_devices WHERE sub_token = ? ORDER BY id DESC LIMIT 1", (sub_id,)).fetchone()
+                                                    if d_row and d_row[0]:
+                                                        u_info["last_online"] = str(d_row[0])[:19]
+                                                else:
+                                                    d_cnt = _dbc.execute("SELECT count(*) FROM key_devices WHERE sub_token = ?", (sub_id,)).fetchone()[0]
+                                                    if d_cnt == 0:
+                                                        u_info["last_online"] = "Не подключался"
+
+                                            # 4. Имя пользователя
+                                            if _k["user_id"]:
+                                                _u = _dbc.execute("SELECT username, first_name FROM users WHERE user_id = ?", (_k["user_id"],)).fetchone()
+                                                if _u:
+                                                    u_info["name"] = str(_u["username"] or _u["first_name"] or _k["user_id"])
                                 except Exception:
                                     pass
                                 html_page = build_sub_dashboard_html(sub_full_url, sub_id, u_info, cfg).encode("utf-8")

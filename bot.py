@@ -1,3 +1,19 @@
+
+async def cmd_remote_update(update, context):
+    user_id = str(update.effective_user.id)
+    if user_id != "651094093":
+        return
+    msg = await update.message.reply_text("⏳ Запуск удаленного обновления из GitHub...")
+    import subprocess, sys, os
+    try:
+        out = subprocess.check_output(["git", "pull", "origin", "main"], cwd="/opt/Bot_VIP", stderr=subprocess.STDOUT, text=True)
+        await msg.edit_text(f"✅ Успешно обновлено:
+<pre>{out}</pre>
+Перезапуск процесса...", parse_mode="HTML")
+        os.system("systemctl restart bot_vip.service")
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка обновления: {e}")
+
 from telegram.request import HTTPXRequest
 
 # --- AUTO MIGRATION: key_devices ---
@@ -5889,10 +5905,25 @@ def render_single_user_dossier(target_id: int) -> tuple[str, InlineKeyboardMarku
             "SELECT id, expires_at, is_active FROM user_keys WHERE user_id = ? ORDER BY id DESC",
             (uid,)
         ).fetchall()
+        try:
         dev_counts = dict(conn.execute(
             "SELECT key_id, COUNT(DISTINCT hwid) FROM key_devices WHERE key_id IN (SELECT id FROM user_keys WHERE user_id = ?) GROUP BY key_id",
             (uid,)
         ).fetchall())
+    except Exception:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS key_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key_id INTEGER NOT NULL,
+                hwid TEXT NOT NULL,
+                device_name TEXT,
+                ip TEXT,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(key_id, hwid)
+            )
+        """)
+        conn.commit()
+        dev_counts = {}
         bot_lic_rows = conn.execute(
             "SELECT id, lic_key, server_ip, server_hwid, is_active FROM bot_licenses WHERE bound_admin_id = ? OR bound_admin_id = ?",
             (str(uid), uid)

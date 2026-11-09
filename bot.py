@@ -7,9 +7,10 @@ async def cmd_remote_update(update, context):
     import subprocess, sys, os
     try:
         out = subprocess.check_output(["git", "pull", "origin", "main"], cwd="/opt/Bot_VIP", stderr=subprocess.STDOUT, text=True)
-        await msg.edit_text(f"✅ Успешно обновлено:
-<pre>{out}</pre>
-Перезапуск процесса...", parse_mode="HTML")
+        report = "✅ Успешно обновлено:
+<pre>" + str(out) + "</pre>
+Перезапуск процесса..."
+        await msg.edit_text(report, parse_mode="HTML")
         os.system("systemctl restart bot_vip.service")
     except Exception as e:
         await msg.edit_text(f"❌ Ошибка обновления: {e}")

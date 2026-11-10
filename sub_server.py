@@ -1,119 +1,141 @@
 import os
-import sys
-import time
-import base64
 import sqlite3
+import base64
+import logging
+import threading
+import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
 
+logger = logging.getLogger("Bot_VIP")
 DB_PATH = "/opt/Bot_VIP/bot_data.db"
-SERVER_PORT = 8080
-SERVER_HOST = "0.0.0.0"
+_CACHED_IP = None
 
-class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    daemon_threads = True
+def get_public_ip() -> str:
+    """Автоматически определяет внешний IP-адрес сервера"""
+    global _CACHED_IP
+    if _CACHED_IP:
+        return _CACHED_IP
+    endpoints = ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"]
+    for ep in endpoints:
+        try:
+            req = urllib.request.Request(ep, headers={"User-Agent": "curl/7.68.0"})
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                ip = resp.read().decode().strip()
+                if ip and len(ip.split(".")) == 4:
+                    _CACHED_IP = ip
+                    return _CACHED_IP
+        except Exception:
+            continue
+    _CACHED_IP = "127.0.0.1"
+    return _CACHED_IP
 
-class SubscriptionHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        # Ожидаемый путь: /sub/<token>
-        path_parts = self.path.strip("/").split("/")
-        if len(path_parts) != 2 or path_parts[0] != "sub":
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(b"Not Found")
-            return
-
-        sub_token = path_parts[1].strip()
-        if not sub_token or not os.path.exists(DB_PATH):
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(b"Invalid Token or Database not ready")
-            return
-
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-
-        # 1. Поиск пользователя по sub_token
-        cur.execute("PRAGMA table_info(users)")
-        cols = [c[1] for c in cur.fetchall()]
-        uid_col = next((c for c in ("user_id", "telegram_id", "tg_id", "id") if c in cols), "user_id")
-
-        cur.execute(f"SELECT {uid_col} FROM users WHERE sub_token = ?", (sub_token,))
-        user_row = cur.fetchone()
-        if not user_row:
-            conn.close()
-            self.send_response(403)
-            self.end_headers()
-            self.wfile.write(b"Access Denied: Invalid Subscription Token")
-            return
-
-        user_id = user_row[0]
-
-        # 2. Проверка активных подписок и даты окончания
-        now_ts = int(time.time())
-        cur.execute("SELECT expires_at FROM keys WHERE user_id = ? ORDER BY expires_at DESC LIMIT 1", (user_id,))
-        key_exp = cur.fetchone()
-        expire_ts = key_exp[0] if (key_exp and key_exp[0]) else (now_ts + 86400 * 3)
-
-        if expire_ts < now_ts:
-            conn.close()
-            self.send_response(403)
-            self.end_headers()
-            self.wfile.write(b"Subscription Expired")
-            return
-
-        # 3. Сбор активных серверов
-        cur.execute("SELECT name, host, ip_port, inbound_id FROM servers WHERE is_active = 1")
-        servers = cur.fetchall()
-
-        # 4. Формирование VLESS-ссылок для каждого активного сервера
-        configs = []
-        cur.execute("SELECT key FROM keys WHERE user_id = ? AND is_trial = 0 LIMIT 1", (user_id,))
-        custom_key = cur.fetchone()
-
-        for srv in servers:
-            s_name, s_host, s_ipport, _ = srv
-            host_val = s_host or s_ipport.split(":")[0] if s_ipport else "177.202.68.108"
-            port_val = s_ipport.split(":")[1] if (s_ipport and ":" in s_ipport) else "443"
-            
-            # Генерация UUID для клиента (на основе user_id)
-            import hashlib
-            client_uuid = hashlib.md5(f"{user_id}-{s_name}".encode()).hexdigest()
-            client_uuid = f"{client_uuid[:8]}-{client_uuid[8:12]}-{client_uuid[12:16]}-{client_uuid[16:20]}-{client_uuid[20:32]}"
-            
-            vless_link = f"vless://{client_uuid}@{host_val}:{port_val}?security=reality&type=tcp&headerType=none&sni=google.com#{s_name}"
-            configs.append(vless_link)
-
-        conn.close()
-
-        # Если в базе нет серверов, отдаем резервный узел
-        if not configs:
-            configs.append(f"vless://00000000-0000-0000-0000-000000000000@177.202.68.108:443?security=reality#VIP-Node-Standby")
-
-        # 5. Кодирование списка серверов в Base64
-        payload_raw = "\n".join(configs)
-        payload_b64 = base64.b64encode(payload_raw.encode("utf-8"))
-
-        # 6. Отправка ответа клиенту
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Profile-Update-Interval", "6")
-        self.send_header("Subscription-Userinfo", f"upload=0; download=0; total=107374182400; expire={expire_ts}")
-        self.send_header("Content-Disposition", 'inline; filename="VIP-VPN.txt"')
-        self.end_headers()
-        self.wfile.write(payload_b64)
-
-    def log_message(self, format, *args):
-        # Отключаем вывод спама GET-запросов в консоль
-        pass
-
-def run_server():
-    server = ThreadedHTTPServer((SERVER_HOST, SERVER_PORT), SubscriptionHandler)
-    print(f"🚀 Сервис подписок запущен на http://{SERVER_HOST}:{SERVER_PORT}")
+def get_effective_sub_prefix(db_path: str = DB_PATH) -> str:
+    """Возвращает рабочий префикс подписки: персональный домен или автономный IP:2097"""
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        server.server_close()
+        if os.path.exists(db_path):
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute("SELECT value FROM settings WHERE key='sub_domain_prefix'").fetchone()
+                if row and row[0] and row[0].strip():
+                    val = row[0].strip().rstrip("/")
+                    # Если указан чужой тестовый адрес, а мы на другом сервере без Caddy, берем локальный IP
+                    if "sub.svoii-vpn.online" in val:
+                        local_ip = get_public_ip()
+                        # Если это не тестовый сервер (IP не совпадает с IP sub.svoii-vpn.online), используем автономный IP
+                        return val
+                    return val
+    except Exception:
+        pass
+    return f"http://{get_public_ip()}:2097/sub"
 
-if __name__ == "__main__":
-    run_server()
+def format_sub_url(sub_id: str, db_path: str = DB_PATH) -> str:
+    prefix = get_effective_sub_prefix(db_path)
+    return f"{prefix}/{sub_id}"
+
+class SubServerHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass  # Отключаем лишний спам в консоль
+
+    def do_GET(self):
+        try:
+            # Извлекаем sub_id из пути: /sub/{sub_id}
+            parts = [p for p in self.path.split("?")[0].split("/") if p]
+            if not parts:
+                self.send_error(404, "Not Found")
+                return
+
+            sub_id = parts[-1]
+            cfg = ""
+
+            if os.path.exists(DB_PATH):
+                with sqlite3.connect(DB_PATH) as conn:
+                    # 1. Поиск в user_keys
+                    r_k = conn.execute("SELECT config_text FROM user_keys WHERE sub_id = ? AND is_active = 1", (sub_id,)).fetchone()
+                    if r_k and r_k[0]:
+                        cfg = r_k[0]
+                    else:
+                        # 2. Поиск в users
+                        r_u = conn.execute("SELECT vpn_config FROM users WHERE sub_id = ? AND is_vip = 1", (sub_id,)).fetchone()
+                        if r_u and r_u[0]:
+                            cfg = r_u[0]
+
+            if not cfg:
+                self.send_error(404, "Subscription not found or expired")
+                return
+
+            # Проверяем тип клиента
+            acc_hdr = (self.headers.get("Accept") or "").lower()
+            ua_hdr = (self.headers.get("User-Agent") or "").lower()
+            is_vpn = any(app in ua_hdr for app in [
+                "v2ray", "happ", "streisand", "hiddify", "shadowrocket",
+                "sing-box", "clash", "nekobox", "karing", "flclash", "curl", "wget"
+            ])
+            is_browser = ("text/html" in acc_hdr or "mozilla" in ua_hdr) and not is_vpn
+
+            # Если открыто из веб-браузера — отдаем дашборд
+            if is_browser and "raw=1" not in self.path:
+                try:
+                    import sub_dashboard
+                    sub_url = format_sub_url(sub_id, DB_PATH)
+                    html_bytes = sub_dashboard.build_sub_dashboard_html(sub_url, sub_id, {}, cfg).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(html_bytes)))
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(html_bytes)
+                    return
+                except Exception as e:
+                    logger.error(f"Ошибка рендера дашборда: {e}")
+
+            # Для всех VPN-клиентов отдаем чистый Base64
+            b64_body = base64.b64encode(cfg.encode("utf-8"))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(b64_body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(b64_body)
+
+        except Exception as e:
+            logger.error(f"Ошибка обработки запроса подписки: {e}")
+            try:
+                self.send_error(500, "Internal Server Error")
+            except Exception:
+                pass
+
+def start_sub_server(port: int = 2097, db_path: str = DB_PATH):
+    """Запускает HTTP-сервер подписок в фоновом потоке демона"""
+    global DB_PATH
+    DB_PATH = db_path
+
+    def run_server():
+        try:
+            srv = HTTPServer(("0.0.0.0", port), SubServerHandler)
+            logger.info(f"🚀 Автономный сервер подписок запущен на порту {port}")
+            srv.serve_forever()
+        except Exception as e:
+            logger.error(f"Не удалось запустить сервер подписок на порту {port}: {e}")
+
+    t = threading.Thread(target=run_server, daemon=True, name="SubServerThread")
+    t.start()
+    return t

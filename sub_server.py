@@ -12,6 +12,14 @@ logger = logging.getLogger("Bot_VIP")
 DB_PATH = "/opt/Bot_VIP/bot_data.db"
 
 def auto_repair_caddy() -> str:
+    # Автоматическое открытие портов 80, 443 и 2097 для выпуска SSL Caddy
+    try:
+        subprocess.run(["ufw", "allow", "80/tcp"], capture_output=True)
+        subprocess.run(["ufw", "allow", "443/tcp"], capture_output=True)
+        subprocess.run(["ufw", "allow", "2097/tcp"], capture_output=True)
+        subprocess.run(["ufw", "reload"], capture_output=True)
+    except Exception:
+        pass
     """Находит домен сервера в Caddyfile и гарантирует наличие reverse_proxy для /sub/*"""
     caddy_path = "/etc/caddy/Caddyfile"
     if not os.path.exists(caddy_path):

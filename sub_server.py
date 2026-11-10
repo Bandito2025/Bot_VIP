@@ -10,114 +10,106 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 logger = logging.getLogger("Bot_VIP")
 DB_PATH = "/opt/Bot_VIP/bot_data.db"
-_CACHED_PREFIX = None
 
-def get_public_ip() -> str:
-    endpoints = ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"]
-    for ep in endpoints:
-        try:
-            req = urllib.request.Request(ep, headers={"User-Agent": "curl/7.68.0"})
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                ip = resp.read().decode().strip()
-                if ip and len(ip.split(".")) == 4:
-                    return ip
-        except Exception:
-            continue
-    return "127.0.0.1"
-
-def patch_caddy_if_needed() -> str:
-    """Находит домен в Caddyfile, встраивает reverse_proxy для /sub/* и перезагружает Caddy"""
-    caddy_file = "/etc/caddy/Caddyfile"
-    if not os.path.exists(caddy_file):
+def auto_repair_caddy() -> str:
+    """Находит домен сервера в Caddyfile и гарантирует наличие reverse_proxy для /sub/*"""
+    caddy_path = "/etc/caddy/Caddyfile"
+    if not os.path.exists(caddy_path):
         return None
-
     try:
-        with open(caddy_file, "r", encoding="utf-8") as f:
+        with open(caddy_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        # Находим первый домен ноды (nl.svoii-vpn.online, pl.svoii-vpn.online и т.д.)
+        # Ищем домен узла (nl.svoii-vpn.online, pl.svoii-vpn.online и др.)
         domains = re.findall(r'^\s*([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?::\d+)?\s*\{', content, re.M)
-        target_domain = None
+        domain = None
         for d in domains:
             if not d.startswith("sub."):
-                target_domain = d
+                domain = d
                 break
-        if not target_domain and domains:
-            target_domain = domains[0]
+        if not domain and domains:
+            domain = domains[0]
 
-        # Если проброса на 2097 ещё нет — вставляем перед wpp-api или перед закрывающей скобкой
-        if "2097" not in content and target_domain:
+        # Если маршрут /sub/* отсутствует — встраиваем его
+        if "2097" not in content and domain:
             rule = "\n        handle /sub/* {\n                reverse_proxy 127.0.0.1:2097\n        }\n"
-            new_content = content
-            if "handle /wpp-api/*" in new_content:
-                new_content = new_content.replace("handle /wpp-api/*", rule.strip() + "\n\n        handle /wpp-api/*", 1)
+            if "handle /wpp-api/*" in content:
+                new_content = content.replace("handle /wpp-api/*", rule.strip() + "\n\n        handle /wpp-api/*", 1)
+            elif "handle_path" in content:
+                pos = content.find("handle_path")
+                new_content = content[:pos] + rule.strip() + "\n\n        " + content[pos:]
             else:
-                pos = new_content.find("}")
-                if pos != -1:
-                    new_content = new_content[:pos] + rule + new_content[pos:]
+                pos = content.find("}")
+                new_content = content[:pos] + rule + content[pos:] if pos != -1 else content + rule
 
-            with open(caddy_file, "w", encoding="utf-8") as f:
+            with open(caddy_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
             subprocess.run(["systemctl", "reload", "caddy"], capture_output=True)
-            logger.info(f"✅ Caddy успешно настроен: домен {target_domain} проксирует /sub/* на 2097")
+            logger.info(f"✅ Caddyfile обновлен: /sub/* направлен на 2097 для {domain}")
 
-        return target_domain
+        return domain
     except Exception as e:
-        logger.error(f"Ошибка настройки Caddy: {e}")
+        logger.error(f"Ошибка auto_repair_caddy: {e}")
         return None
 
-def get_effective_sub_prefix(db_path: str = DB_PATH) -> str:
-    """Определяет корректный HTTPS адрес без ошибочного порта 2097"""
-    global _CACHED_PREFIX
-    if _CACHED_PREFIX:
-        return _CACHED_PREFIX
+def auto_heal_sub_database(db_path: str = DB_PATH):
+    """Вычищает порт 2097 из настроек базы данных и переводит домен на чистый https://"""
+    if not os.path.exists(db_path):
+        return
+    try:
+        discovered_domain = auto_repair_caddy()
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key='sub_domain_prefix'").fetchone()
+            current_val = row[0].strip() if (row and row[0]) else ""
 
-    caddy_domain = patch_caddy_if_needed()
+            # Если значение содержит :2097 или ошибочный http://
+            clean_val = current_val
+            if ":2097" in clean_val:
+                clean_val = clean_val.replace(":2097", "")
+            if clean_val.startswith("http://") and any(ext in clean_val for ext in [".online", ".ru", ".com", ".net", ".org"]):
+                clean_val = "https://" + clean_val[7:]
 
-    # 1. Проверяем текущее значение в базе данных
-    current_val = ""
+            if not clean_val or "sub.bot-vip.online" in clean_val:
+                if discovered_domain:
+                    clean_val = f"https://{discovered_domain}/sub"
+
+            if clean_val and not clean_val.endswith("/sub"):
+                clean_val = clean_val.rstrip("/") + "/sub"
+
+            if clean_val != current_val and clean_val:
+                conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('sub_domain_prefix', ?)", (clean_val,))
+                conn.commit()
+                logger.info(f"✅ Sub URL в базе исправлен: {clean_val}")
+    except Exception as e:
+        logger.error(f"Ошибка auto_heal_sub_database: {e}")
+
+def get_clean_sub_url(sub_id: str, db_path: str = DB_PATH) -> str:
+    """Формирует гарантированно чистый HTTPS URL подписки без порта 2097"""
+    prefix = ""
     try:
         if os.path.exists(db_path):
             with sqlite3.connect(db_path) as conn:
                 row = conn.execute("SELECT value FROM settings WHERE key='sub_domain_prefix'").fetchone()
                 if row and row[0]:
-                    current_val = row[0].strip().rstrip("/")
+                    prefix = row[0].strip()
     except Exception:
         pass
 
-    # 2. Если в базе было ошибочное значение с доменом и портом :2097 — вычищаем порт
-    if current_val and any(ext in current_val for ext in [".online", ".ru", ".com", ".net", ".org", ".io"]):
-        clean = current_val.replace(":2097", "")
-        if clean.startswith("http://"):
-            clean = "https://" + clean[7:]
-        if not clean.endswith("/sub"):
-            clean = clean + "/sub"
-        _CACHED_PREFIX = clean
-    elif caddy_domain:
-        _CACHED_PREFIX = f"https://{caddy_domain}/sub"
-    else:
-        # Fallback на IP-адрес сервера (для IP порт 2097 работает без SSL-ошибок)
-        ip = get_public_ip()
-        _CACHED_PREFIX = f"http://{ip}:2097/sub"
-        try:
-            subprocess.run(["ufw", "allow", "2097/tcp"], capture_output=True)
-        except Exception:
-            pass
+    if not prefix or ":2097" in prefix or "bot-vip.online" in prefix:
+        caddy_domain = auto_repair_caddy()
+        if caddy_domain:
+            prefix = f"https://{caddy_domain}/sub"
+        else:
+            prefix = prefix.replace(":2097", "") if prefix else "https://sub.svoii-vpn.online/sub"
 
-    # 3. Сохраняем исправленный URL в базу данных
-    try:
-        if os.path.exists(db_path):
-            with sqlite3.connect(db_path) as conn:
-                conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('sub_domain_prefix', ?)", (_CACHED_PREFIX,))
-                conn.commit()
-    except Exception:
-        pass
+    if prefix.startswith("http://") and any(ext in prefix for ext in [".online", ".ru", ".com", ".net", ".org"]):
+        prefix = "https://" + prefix[7:]
 
-    return _CACHED_PREFIX
+    prefix = prefix.rstrip("/")
+    if not prefix.endswith("/sub"):
+        prefix = prefix + "/sub"
 
-def format_sub_url(sub_id: str, db_path: str = DB_PATH) -> str:
-    prefix = get_effective_sub_prefix(db_path)
     return f"{prefix}/{sub_id}"
 
 class SubServerHandler(BaseHTTPRequestHandler):
@@ -159,7 +151,7 @@ class SubServerHandler(BaseHTTPRequestHandler):
             if is_browser and "raw=1" not in self.path:
                 try:
                     import sub_dashboard
-                    sub_url = format_sub_url(sub_id, DB_PATH)
+                    sub_url = get_clean_sub_url(sub_id, DB_PATH)
                     html_bytes = sub_dashboard.build_sub_dashboard_html(sub_url, sub_id, {}, cfg).encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -180,7 +172,7 @@ class SubServerHandler(BaseHTTPRequestHandler):
             self.wfile.write(b64_body)
 
         except Exception as e:
-            logger.error(f"Ошибка запроса подписки: {e}")
+            logger.error(f"Ошибка обработки: {e}")
             try:
                 self.send_error(500, "Internal Server Error")
             except Exception:
@@ -189,15 +181,18 @@ class SubServerHandler(BaseHTTPRequestHandler):
 def start_sub_server(port: int = 2097, db_path: str = DB_PATH):
     global DB_PATH
     DB_PATH = db_path
-    threading.Thread(target=get_effective_sub_prefix, args=(db_path,), daemon=True).start()
+    auto_heal_sub_database(db_path)
 
     def run():
         try:
             srv = HTTPServer(("0.0.0.0", port), SubServerHandler)
             srv.serve_forever()
         except Exception as e:
-            logger.error(f"Ошибка запуска sub_server: {e}")
+            logger.error(f"Ошибка старта sub_server: {e}")
 
     t = threading.Thread(target=run, daemon=True, name="SubServerThread")
     t.start()
     return t
+
+# Алиас для обратной совместимости с bot.py
+format_sub_url = get_clean_sub_url

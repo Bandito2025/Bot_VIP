@@ -1,3 +1,7 @@
+import sys, os
+if '/opt/Bot_VIP' not in sys.path:
+    sys.path.insert(0, '/opt/Bot_VIP')
+from sub_server import get_clean_sub_url, start_sub_server, auto_heal_sub_database
 import sub_server
 from sub_server import start_sub_server, format_sub_url
 from sub_dashboard import build_sub_dashboard_html
@@ -1484,7 +1488,7 @@ async def create_or_extend_user_key(user_id: int, days: int = 30, create_new: bo
         link = await provision_client_on_3xui(srv, user_id, client_uuid, sub_id, expiry_ms, k_id)
         generated_links.append(link)
         if srv[8] and not primary_sub_url:
-            primary_sub_url = f"{srv[8].rstrip('/')}/{sub_id}"
+            primary_sub_url = get_clean_sub_url(sub_id)
 
     with sqlite3.connect(DB_PATH) as conn:
         p_cur = conn.execute("SELECT id, config_data FROM vpn_pool WHERE is_assigned = 0 LIMIT 1")
@@ -1499,9 +1503,9 @@ async def create_or_extend_user_key(user_id: int, days: int = 30, create_new: bo
 
     global_sub_domain = get_setting("sub_domain_prefix", "")
     if global_sub_domain:
-        primary_sub_url = f"{global_sub_domain.rstrip('/')}/{sub_id}"
+        primary_sub_url = get_clean_sub_url(sub_id)
     elif not primary_sub_url:
-        primary_sub_url = f"https://sub.bot-vip.online/sub/{sub_id}"
+        primary_sub_url = get_clean_sub_url(sub_id)
 
     if not generated_links:
         try:
@@ -1857,7 +1861,7 @@ async def render_single_key_control(user_id: int, key_id: int) -> tuple[str, Inl
     dev_lim = get_setting("device_limit_ip", "2")
 
     sub_dom = get_setting("sub_domain_prefix", "https://sub.bot-vip.online/sub")
-    sub_url = f"{sub_dom.rstrip('/')}/{sub_id}"
+    sub_url = get_clean_sub_url(sub_id)
 
     text = (
         f"🔑 <b>Управление ключом: {html.escape(k_name)}</b>\n\n"
@@ -3355,7 +3359,7 @@ async def callbacks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         sub_id = row[4]
         sub_dom = get_setting("sub_domain_prefix", "https://sub.bot-vip.online/sub")
-        sub_url = f"{sub_dom.rstrip('/')}/{sub_id}"
+        sub_url = get_clean_sub_url(sub_id)
         qr_api_url = f"https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={quote(sub_url)}"
         try:
             await query.message.reply_photo(
@@ -6753,7 +6757,7 @@ async def handle_all_custom_callbacks(update: Update, context: ContextTypes.DEFA
             return
         k_uid, kname, sub_id = row
         sub_prefix = get_setting("sub_domain_prefix", "") or "https://pl.svoii-vpn.online:2097/sub"
-        sub_url = f"{sub_prefix.rstrip('/')}/{sub_id}"
+        sub_url = get_clean_sub_url(sub_id)
         qr_payload = sub_url
 
         txt = (

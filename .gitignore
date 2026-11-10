@@ -9,3 +9,10 @@ bot_data.db*
 *.db
 *.db-wal
 *.db-shm
+*.db
+*.db-wal
+*.db-shm
+*.bak*
+backup/
+__pycache__/
+*.pyc

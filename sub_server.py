@@ -25,77 +25,99 @@ def get_public_ip() -> str:
             continue
     return "127.0.0.1"
 
-def auto_configure_webserver(db_path: str = DB_PATH) -> str:
-    """Автоматически находит домен сервера, прописывает проксирование в Caddy и возвращает чистый HTTPS URL"""
+def patch_caddy_if_needed() -> str:
+    """Находит домен в Caddyfile, встраивает reverse_proxy для /sub/* и перезагружает Caddy"""
+    caddy_file = "/etc/caddy/Caddyfile"
+    if not os.path.exists(caddy_file):
+        return None
+
+    try:
+        with open(caddy_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Находим первый домен ноды (nl.svoii-vpn.online, pl.svoii-vpn.online и т.д.)
+        domains = re.findall(r'^\s*([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?::\d+)?\s*\{', content, re.M)
+        target_domain = None
+        for d in domains:
+            if not d.startswith("sub."):
+                target_domain = d
+                break
+        if not target_domain and domains:
+            target_domain = domains[0]
+
+        # Если проброса на 2097 ещё нет — вставляем перед wpp-api или перед закрывающей скобкой
+        if "2097" not in content and target_domain:
+            rule = "\n        handle /sub/* {\n                reverse_proxy 127.0.0.1:2097\n        }\n"
+            new_content = content
+            if "handle /wpp-api/*" in new_content:
+                new_content = new_content.replace("handle /wpp-api/*", rule.strip() + "\n\n        handle /wpp-api/*", 1)
+            else:
+                pos = new_content.find("}")
+                if pos != -1:
+                    new_content = new_content[:pos] + rule + new_content[pos:]
+
+            with open(caddy_file, "w", encoding="utf-8") as f:
+                f.write(new_content)
+
+            subprocess.run(["systemctl", "reload", "caddy"], capture_output=True)
+            logger.info(f"✅ Caddy успешно настроен: домен {target_domain} проксирует /sub/* на 2097")
+
+        return target_domain
+    except Exception as e:
+        logger.error(f"Ошибка настройки Caddy: {e}")
+        return None
+
+def get_effective_sub_prefix(db_path: str = DB_PATH) -> str:
+    """Определяет корректный HTTPS адрес без ошибочного порта 2097"""
     global _CACHED_PREFIX
     if _CACHED_PREFIX:
         return _CACHED_PREFIX
 
-    caddy_file = "/etc/caddy/Caddyfile"
-    discovered_domain = None
+    caddy_domain = patch_caddy_if_needed()
 
-    if os.path.exists(caddy_file):
-        try:
-            with open(caddy_file, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            # Находим домены в Caddyfile (например: nl.svoii-vpn.online или pl.svoii-vpn.online)
-            domains = re.findall(r'^\s*([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?::\d+)?\s*\{', content, re.M)
-            for d in domains:
-                if not d.startswith("sub."):
-                    discovered_domain = d
-                    break
-            if not discovered_domain and domains:
-                discovered_domain = domains[0]
-
-            # Если правило проксирования еще не добавлено в Caddy
-            if "2097" not in content and discovered_domain:
-                rule = "\n    # SVOII_VPN SUB ROUTE\n    handle /sub/* {\n        reverse_proxy 127.0.0.1:2097\n    }\n"
-                new_content = content
-                if "handle /wpp-api/*" in new_content:
-                    new_content = new_content.replace("handle /wpp-api/*", rule.strip() + "\n\n    handle /wpp-api/*", 1)
-                else:
-                    last_brace = new_content.rfind("}")
-                    if last_brace != -1:
-                        new_content = new_content[:last_brace] + rule + new_content[last_brace:]
-
-                # Безопасная валидация перед сохранением
-                test_file = "/tmp/Caddyfile.test"
-                with open(test_file, "w", encoding="utf-8") as tf:
-                    tf.write(new_content)
-                val_res = subprocess.run(["caddy", "validate", "--config", test_file], capture_output=True, text=True)
-                if val_res.returncode == 0:
-                    with open(caddy_file, "w", encoding="utf-8") as f:
-                        f.write(new_content)
-                    subprocess.run(["systemctl", "reload", "caddy"], capture_output=True)
-                    logger.info("✅ Caddy успешно настроен на проксирование /sub/* на порт 2097")
-
-            if discovered_domain:
-                _CACHED_PREFIX = f"https://{discovered_domain}/sub"
-                # Синхронизируем базу данных
-                try:
-                    if os.path.exists(db_path):
-                        with sqlite3.connect(db_path) as conn:
-                            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('sub_domain_prefix', ?)", (_CACHED_PREFIX,))
-                            conn.commit()
-                except Exception:
-                    pass
-                return _CACHED_PREFIX
-
-        except Exception as e:
-            logger.error(f"Ошибка автонастройки Caddy: {e}")
-
-    # Fallback: если Caddy нет — используем прямой IP (без HSTS) и открываем файрвол
+    # 1. Проверяем текущее значение в базе данных
+    current_val = ""
     try:
-        subprocess.run(["ufw", "allow", "2097/tcp"], capture_output=True)
+        if os.path.exists(db_path):
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute("SELECT value FROM settings WHERE key='sub_domain_prefix'").fetchone()
+                if row and row[0]:
+                    current_val = row[0].strip().rstrip("/")
     except Exception:
         pass
-    ip = get_public_ip()
-    _CACHED_PREFIX = f"http://{ip}:2097/sub"
+
+    # 2. Если в базе было ошибочное значение с доменом и портом :2097 — вычищаем порт
+    if current_val and any(ext in current_val for ext in [".online", ".ru", ".com", ".net", ".org", ".io"]):
+        clean = current_val.replace(":2097", "")
+        if clean.startswith("http://"):
+            clean = "https://" + clean[7:]
+        if not clean.endswith("/sub"):
+            clean = clean + "/sub"
+        _CACHED_PREFIX = clean
+    elif caddy_domain:
+        _CACHED_PREFIX = f"https://{caddy_domain}/sub"
+    else:
+        # Fallback на IP-адрес сервера (для IP порт 2097 работает без SSL-ошибок)
+        ip = get_public_ip()
+        _CACHED_PREFIX = f"http://{ip}:2097/sub"
+        try:
+            subprocess.run(["ufw", "allow", "2097/tcp"], capture_output=True)
+        except Exception:
+            pass
+
+    # 3. Сохраняем исправленный URL в базу данных
+    try:
+        if os.path.exists(db_path):
+            with sqlite3.connect(db_path) as conn:
+                conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('sub_domain_prefix', ?)", (_CACHED_PREFIX,))
+                conn.commit()
+    except Exception:
+        pass
+
     return _CACHED_PREFIX
 
 def format_sub_url(sub_id: str, db_path: str = DB_PATH) -> str:
-    prefix = auto_configure_webserver(db_path)
+    prefix = get_effective_sub_prefix(db_path)
     return f"{prefix}/{sub_id}"
 
 class SubServerHandler(BaseHTTPRequestHandler):
@@ -134,7 +156,6 @@ class SubServerHandler(BaseHTTPRequestHandler):
             ])
             is_browser = ("text/html" in acc_hdr or "mozilla" in ua_hdr) and not is_vpn
 
-            # Браузер -> отдаем HTML-дашборд
             if is_browser and "raw=1" not in self.path:
                 try:
                     import sub_dashboard
@@ -150,7 +171,6 @@ class SubServerHandler(BaseHTTPRequestHandler):
                 except Exception as e:
                     logger.error(f"Ошибка дашборда: {e}")
 
-            # VPN-клиент -> чистый Base64
             b64_body = base64.b64encode(cfg.encode("utf-8"))
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -160,7 +180,7 @@ class SubServerHandler(BaseHTTPRequestHandler):
             self.wfile.write(b64_body)
 
         except Exception as e:
-            logger.error(f"Ошибка запроса: {e}")
+            logger.error(f"Ошибка запроса подписки: {e}")
             try:
                 self.send_error(500, "Internal Server Error")
             except Exception:
@@ -169,8 +189,7 @@ class SubServerHandler(BaseHTTPRequestHandler):
 def start_sub_server(port: int = 2097, db_path: str = DB_PATH):
     global DB_PATH
     DB_PATH = db_path
-    # Фоновая автонастройка Caddy при запуске
-    threading.Thread(target=auto_configure_webserver, args=(db_path,), daemon=True).start()
+    threading.Thread(target=get_effective_sub_prefix, args=(db_path,), daemon=True).start()
 
     def run():
         try:
